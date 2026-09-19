@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Campus Parking Reservations</title>
+<style>
+  :root {
+    --free: #2e9e4f;
+    --taken: #c0392b;
+    --selected: #2563eb;
+    --neutral: #9aa0a6;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--bg);
+    margin: 0;
+    padding: 24px;
+    color: #1f2328;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .subtitle { color: #57606a; margin-top: 0; margin-bottom: 20px; }
+  .card {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 20px;
+    max-width: 720px;
+    margin: 0 auto 20px auto;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+  .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 140px; }
+  label { font-size: 0.85rem; color: #57606a; }
+  input {
+    padding: 8px 10px;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    font-size: 0.95rem;
+  }
+  .legend { display: flex; gap: 18px; font-size: 0.85rem; margin: 14px 0 4px 0; color: #57606a; }
+  .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .spot {
+    padding: 16px 8px;
+    text-align: center;
+    border-radius: 8px;
+    border: none;
+    font-weight: 600;
+    color: white;
+    cursor: pointer;
+    background: var(--neutral);
+    transition: transform 0.08s ease;
+  }
+  .spot:hover:not(:disabled) { transform: translateY(-2px); }
+  .spot.free { background: var(--free); }
+  .spot.taken { background: var(--taken); cursor: not-allowed; opacity: 0.75; }
+  .spot.selected { background: var(--selected); outline: 3px solid #1e40af55; }
+  .spot:disabled { cursor: not-allowed; }
+  .hint { font-size: 0.85rem; color: #57606a; margin-top: 10px; }
+  .details { margin-top: 18px; display: none; }
+  .details.show { display: block; }
+  .actions { display: flex; gap: 10px; margin-top: 14px; }
+  button.primary {
+    background: var(--selected);
+    color: white;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  button.secondary {
+    background: #eef0f2;
+    color: #1f2328;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  button.primary:disabled { background: #a9b8e8; cursor: not-allowed; }
+  .error { color: var(--taken); font-size: 0.9rem; margin-top: 8px; min-height: 1.1em; }
+
+  .corner {
+    position: fixed;
+    bottom: 18px;
+    right: 18px;
+    background: var(--card);
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.15);
+    width: 260px;
+  }
+  .corner h2 { font-size: 0.95rem; margin: 0 0 10px 0; }
+  .corner .row { margin-bottom: 8px; }
+  .corner input { width: 100%; }
+  button.danger {
+    background: var(--taken);
+    color: white;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    width: 100%;
+    cursor: pointer;
+  }
+  .corner .msg { font-size: 0.8rem; margin-top: 6px; min-height: 1.1em; }
+
+  .modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    background: white;
+    border-radius: 10px;
+    padding: 24px;
+    max-width: 360px;
+    text-align: center;
+  }
+  .modal h2 { margin-top: 0; }
+  .modal code {
+    display: block;
+    background: #f0f2f5;
+    padding: 8px;
+    border-radius: 6px;
+    margin: 12px 0;
+    word-break: break-all;
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>🅿️ Campus Parking Reservations</h1>
+<p class="subtitle">Pick a date and time, then click a free spot.</p>
+
+<div class="card">
+  <div class="row">
+    <div class="field">
+      <label for="date">Date</label>
+      <input type="date" id="date" />
+    </div>
+    <div class="field">
+      <label for="start">From</label>
+      <input type="time" id="start" value="09:00" />
+    </div>
+    <div class="field">
+      <label for="end">To</label>
+      <input type="time" id="end" value="10:00" />
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><span class="swatch" style="background:var(--free)"></span>Free</span>
+    <span><span class="swatch" style="background:var(--taken)"></span>Taken</span>
+    <span><span class="swatch" style="background:var(--selected)"></span>Selected</span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <div class="hint" id="hint">Choose a date and time to see which spots are free.</div>
+
+  <div class="details" id="details">
+    <div class="row">
+      <div class="field">
+        <label for="name">Name</label>
+        <input type="text" id="name" placeholder="Your name" />
+      </div>
+      <div class="field">
+        <label for="plate">License plate</label>
+        <input type="text" id="plate" placeholder="e.g. AB123CD" />
+      </div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="confirmBtn">Confirm reservation</button>
+      <button class="secondary" id="clearBtn">Clear</button>
+    </div>
+    <div class="error" id="formError"></div>
+  </div>
+</div>
+
+<div class="corner">
+  <h2>Cancel a reservation</h2>
+  <div class="row">
+    <input type="text" id="cancelId" placeholder="Reservation ID" />
+  </div>
+  <button class="danger" id="cancelBtn">Cancel reservation</button>
+  <div class="msg" id="cancelMsg"></div>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <h2>Reservation confirmed 🎉</h2>
+    <p>Your reservation ID (save this to cancel later):</p>
+    <code id="modalId"></code>
+    <button class="primary" id="modalCloseBtn">Done</button>
+  </div>
+</div>
+
+<script>
+const dateEl = document.getElementById('date');
+const startEl = document.getElementById('start');
+const endEl = document.getElementById('end');
+const gridEl = document.getElementById('grid');
+const hintEl = document.getElementById('hint');
+const detailsEl = document.getElementById('details');
+const nameEl = document.getElementById('name');
+const plateEl = document.getElementById('plate');
+const confirmBtn = document.getElementById('confirmBtn');
+const clearBtn = document.getElementById('clearBtn');
+const formError = document.getElementById('formError');
+const modalBackdrop = document.getElementById('modalBackdrop');
+const modalId = document.getElementById('modalId');
+const modalCloseBtn = document.getElementById('modalCloseBtn');
+const cancelIdEl = document.getElementById('cancelId');
+const cancelBtn = document.getElementById('cancelBtn');
+const cancelMsg = document.getElementById('cancelMsg');
+
+let selectedResourceId = null;
+let resourcesCache = [];
+
+// Default the date picker to today.
+dateEl.value = new Date().toISOString().slice(0, 10);
+
+function isoRange() {
+  if (!dateEl.value || !startEl.value || !endEl.value) return null;
+  return {
+    start: `${dateEl.value}T${startEl.value}:00`,
+    end: `${dateEl.value}T${endEl.value}:00`,
+  };
+}
+
+async function loadResources() {
+  const res = await fetch('/resources');
+  resourcesCache = await res.json();
+  renderGrid(null);
+}
+
+function renderGrid(availabilityById) {
+  gridEl.innerHTML = '';
+  resourcesCache.forEach(r => {
+    const btn = document.createElement('button');
+    btn.className = 'spot';
+    btn.textContent = r.label;
+    btn.dataset.id = r.id;
+
+    if (availabilityById) {
+      const available = availabilityById[r.id];
+      btn.classList.add(available ? 'free' : 'taken');
+      btn.disabled = !available;
+      if (r.id === selectedResourceId && available) {
+        btn.classList.add('selected');
+      }
+      if (available) {
+        btn.addEventListener('click', () => selectSpot(r.id));
+      }
+    } else {
+      btn.disabled = true;
+    }
+    gridEl.appendChild(btn);
+  });
+}
+
+async function refreshAvailability() {
+  const range = isoRange();
+  if (!range) return;
+  hintEl.textContent = 'Checking availability...';
+  const url = `/availability-grid?start_time=${encodeURIComponent(range.start)}&end_time=${encodeURIComponent(range.end)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    hintEl.textContent = 'Could not check availability (invalid time range?).';
+    return;
+  }
+  const data = await res.json();
+  const byId = {};
+  data.forEach(d => byId[d.id] = d.available);
+  // If the currently selected spot became unavailable (e.g. time changed), deselect it.
+  if (selectedResourceId && !byId[selectedResourceId]) {
+    selectedResourceId = null;
+    detailsEl.classList.remove('show');
+  }
+  renderGrid(byId);
+  hintEl.textContent = 'Green spots are free -- click one to reserve it.';
+}
+
+function selectSpot(id) {
+  selectedResourceId = id;
+  detailsEl.classList.add('show');
+  formError.textContent = '';
+  refreshAvailability(); // re-render so the selection highlight shows
+}
+
+function resetForm() {
+  selectedResourceId = null;
+  nameEl.value = '';
+  plateEl.value = '';
+  formError.textContent = '';
+  detailsEl.classList.remove('show');
+  refreshAvailability();
+}
+
+async function confirmReservation() {
+  formError.textContent = '';
+  const range = isoRange();
+  if (!selectedResourceId || !range) {
+    formError.textContent = 'Pick a date, time and a free spot first.';
+    return;
+  }
+  if (!nameEl.value.trim() || !plateEl.value.trim()) {
+    formError.textContent = 'Please fill in your name and license plate.';
+    return;
+  }
+  confirmBtn.disabled = true;
+  try {
+    const createRes = await fetch('/reservations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        resource_id: selectedResourceId,
+        user_id: plateEl.value.trim(),
+        user_name: nameEl.value.trim(),
+        start_time: range.start,
+        end_time: range.end,
+      }),
+    });
+    const created = await createRes.json();
+    if (!createRes.ok) throw new Error(created.detail || 'Could not create reservation.');
+
+    const confirmRes = await fetch(`/reservations/${created.id}/confirm`, { method: 'POST' });
+    const confirmed = await confirmRes.json();
+    if (!confirmRes.ok) throw new Error(confirmed.detail || 'Could not confirm reservation.');
+
+    modalId.textContent = confirmed.id;
+    modalBackdrop.classList.add('show');
+    resetForm();
+  } catch (err) {
+    formError.textContent = err.message;
+  } finally {
+    confirmBtn.disabled = false;
+  }
+}
+
+async function cancelReservation() {
+  cancelMsg.textContent = '';
+  const id = cancelIdEl.value.trim();
+  if (!id) {
+    cancelMsg.textContent = 'Enter a reservation ID.';
+    return;
+  }
+  try {
+    const res = await fetch(`/reservations/${id}/cancel`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Could not cancel reservation.');
+    cancelMsg.textContent = `Reservation ${data.id} cancelled.`;
+    cancelMsg.style.color = 'var(--free)';
+    cancelIdEl.value = '';
+    refreshAvailability();
+  } catch (err) {
+    cancelMsg.textContent = err.message;
+    cancelMsg.style.color = 'var(--taken)';
+  }
+}
+
+dateEl.addEventListener('change', refreshAvailability);
+startEl.addEventListener('change', refreshAvailability);
+endEl.addEventListener('change', refreshAvailability);
+confirmBtn.addEventListener('click', confirmReservation);
+clearBtn.addEventListener('click', resetForm);
+cancelBtn.addEventListener('click', cancelReservation);
+modalCloseBtn.addEventListener('click', () => modalBackdrop.classList.remove('show'));
+
+loadResources().then(refreshAvailability);
+</script>
+</body>
+</html>
