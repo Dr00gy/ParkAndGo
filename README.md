@@ -17,9 +17,11 @@ src/
   db.py             SQLAlchemy ORM models + engine/session setup
   services.py       business rules and state transitions
   notification.py   Notification Service boundary (+ stub implementation)
-  main.py           FastAPI HTTP layer + resources/availability-grid endpoints
+  auth.py           password hashing + session token helpers
+  accounts.py       register / login / session business logic
+  main.py           FastAPI HTTP layer + resources/availability-grid/auth endpoints
 static/
-  index.html        simple point-and-click reservation UI, served at /ui/
+  index.html        point-and-click reservation UI with login/register, served at /ui/
 tests/
   test_reservation_service.py   unit tests for business rules
   test_persistence_spike.py     C01 engineering spike (persistence)
@@ -31,7 +33,7 @@ docs/
 
 ## Setup
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
@@ -43,17 +45,28 @@ python -m pytest -v
 
 ## Run the API
 ```bash
-uvicorn src.main:app --reload --port 8001
+uvicorn src.main:app --reload
 ```
 Interactive API docs (Swagger) are then at `http://127.0.0.1:8001/docs`.
 
 ### Web UI
 A simple point-and-click reservation page is served at
-`http://127.0.0.1:8001/ui/`. Pick a date and time range, click a free
-(green) spot, fill in your name and plate number, and confirm — you'll get
-a popup with your reservation ID. Taken spots are shown in red and can't be
-clicked, like picking a seat for a movie. Use the "Cancel a reservation"
-box in the corner with that ID to release the spot again.
+`http://127.0.0.1:8001/ui/`. Pick a date, a start time, and a duration
+(30-minute increments up to 4 hours), then click a free (green) spot, fill
+in your name and plate number, and confirm — you'll get a popup with your
+reservation ID. Taken spots are shown in red and can't be clicked, like
+picking a seat for a movie. You can only pick times from now onward.
+
+**Accounts:** use "Register"/"Log in" in the top right to create an
+account (first/last name, email, phone, date of birth, password) or sign
+in. While logged in, the Name field auto-fills from your account, and
+"My reservations" lists everything you've booked with a red Delete button
+on each row — click a row to expand its full details. Booking without an
+account still works; you'll just need to type your name each time and
+won't have a "My reservations" list for those bookings.
+
+Use the "Cancel a reservation" box in the corner with a reservation ID to
+release any spot (yours or not — see the security note below).
 
 ### Example request
 ```bash
@@ -91,6 +104,21 @@ formalizing that as an automated API-level test is part of CP1.
 - Two `CONFIRMED` reservations for the same parking spot must not overlap.
 - A reservation must start and end within campus parking operating hours
   (06:00–23:00).
+- A reservation's start time must not be in the past.
+- A reservation's duration must be a multiple of 30 minutes, up to 4 hours.
+
+## Accounts
+Registering stores first name, last name, email (unique), phone, date of
+birth, and a password (hashed with PBKDF2-HMAC-SHA256 + a per-account salt,
+stdlib-only — see `src/auth.py`). Logging in issues a session token stored
+in the database (`sessions` table), sent back as `Authorization: Bearer
+<token>` on later requests. A reservation made while logged in is tagged
+with `account_id`, which is what `/reservations/mine` filters on.
+
+**Known simplification:** cancelling a reservation by ID doesn't check
+that the canceller is the person who booked it — anyone with the ID can
+cancel it. Fine for a course demo; a real system would check
+`account_id` (or require the plate number) before allowing a cancel.
 
 ## Known open question
 Whether `DRAFT` reservations should auto-expire after a period of

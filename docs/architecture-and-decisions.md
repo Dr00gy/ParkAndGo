@@ -54,6 +54,27 @@ operation (`DRAFT`/`CONFIRMED` -> `CANCELLED`) rather than deleting the
 row. This preserves history and keeps a single state machine as the only
 way a reservation's status changes, consistent with the Project Frame.
 
+## Key decision: stdlib-only password hashing
+Accounts (`src/accounts.py`, `src/auth.py`) hash passwords with
+PBKDF2-HMAC-SHA256 via Python's built-in `hashlib`, rather than
+`bcrypt`/`passlib`/`argon2`. Those ship as compiled native packages, and
+after hitting a Rust build failure installing `pydantic-core` on Windows
++ Python 3.14, adding another compiled dependency wasn't worth the risk
+for a course project. PBKDF2 with a random per-account salt is a
+reasonable, standard choice at this scope.
+
+## Key decision: session tokens stored in the database, not in memory
+Login sessions live in a `sessions` table (token -> account_id), not an
+in-process dict, so a login survives an `--reload` restart, consistent
+with everything else in this project being real, persisted state rather
+than something that only works within one run.
+
+## Key decision: 30-minute increments and a 4-hour cap
+`RESERVATION_STEP_MINUTES = 30` and `MAX_DURATION_MINUTES = 240` in
+`services.py` are simple constants, not configuration -- a reasonable
+default for a parking reservation, revisited if the domain needs it
+(e.g. an overnight lot).
+
 ## Key decision: ORM objects as the working representation
 For C01's scope we operate directly on `ReservationORM` objects in
 `services.py` rather than mapping every DB row to-and-from the plain

@@ -20,8 +20,17 @@
     padding: 24px;
     color: #1f2328;
   }
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    max-width: 720px;
+    margin: 0 auto;
+  }
   h1 { font-size: 1.4rem; margin-bottom: 4px; }
   .subtitle { color: #57606a; margin-top: 0; margin-bottom: 20px; }
+  .session-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+  .session-bar .greeting { font-size: 0.9rem; color: #1f2328; margin-right: 4px; }
   .card {
     background: var(--card);
     border-radius: 10px;
@@ -33,12 +42,15 @@
   .row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
   .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 140px; }
   label { font-size: 0.85rem; color: #57606a; }
-  input {
+  input, select {
     padding: 8px 10px;
     border: 1px solid #d0d7de;
     border-radius: 6px;
     font-size: 0.95rem;
+    font-family: inherit;
+    background: white;
   }
+  input:disabled { background: #f0f2f5; color: #57606a; }
   .legend { display: flex; gap: 18px; font-size: 0.85rem; margin: 14px 0 4px 0; color: #57606a; }
   .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
   .grid {
@@ -80,12 +92,21 @@
     background: #eef0f2;
     color: #1f2328;
     border: none;
-    padding: 10px 18px;
+    padding: 8px 16px;
     border-radius: 6px;
-    font-size: 0.95rem;
+    font-size: 0.9rem;
     cursor: pointer;
   }
   button.primary:disabled { background: #a9b8e8; cursor: not-allowed; }
+  button.link {
+    background: none;
+    border: none;
+    color: var(--selected);
+    cursor: pointer;
+    font-size: 0.85rem;
+    padding: 0;
+    text-decoration: underline;
+  }
   .error { color: var(--taken); font-size: 0.9rem; margin-top: 8px; min-height: 1.1em; }
 
   .corner {
@@ -107,9 +128,11 @@
     border: none;
     padding: 8px 14px;
     border-radius: 6px;
-    width: 100%;
     cursor: pointer;
+    font-size: 0.85rem;
+    white-space: nowrap;
   }
+  button.danger.full { width: 100%; }
   .corner .msg { font-size: 0.8rem; margin-top: 6px; min-height: 1.1em; }
 
   .modal-backdrop {
@@ -119,15 +142,21 @@
     background: rgba(0,0,0,0.4);
     align-items: center;
     justify-content: center;
+    z-index: 50;
+    padding: 16px;
   }
   .modal-backdrop.show { display: flex; }
   .modal {
     background: white;
     border-radius: 10px;
     padding: 24px;
-    max-width: 360px;
+    max-width: 380px;
+    width: 100%;
     text-align: center;
+    max-height: 88vh;
+    overflow-y: auto;
   }
+  .modal.wide { max-width: 480px; }
   .modal h2 { margin-top: 0; }
   .modal code {
     display: block;
@@ -138,12 +167,32 @@
     word-break: break-all;
     font-size: 0.85rem;
   }
+  .modal .field { text-align: left; margin-bottom: 10px; }
+  .modal .row { text-align: left; }
+  .modal-switch { margin-top: 14px; font-size: 0.85rem; color: #57606a; }
+
+  .res-list { text-align: left; margin-top: 10px; }
+  .res-row { border-bottom: 1px solid #eef0f2; padding: 10px 0; }
+  .res-summary { display: flex; justify-content: space-between; align-items: center; gap: 10px; cursor: pointer; }
+  .res-summary .label { font-size: 0.9rem; }
+  .res-state { font-size: 0.75rem; padding: 2px 8px; border-radius: 10px; color: white; margin-left: 6px; }
+  .res-state.CONFIRMED { background: var(--free); }
+  .res-state.CANCELLED { background: var(--taken); }
+  .res-state.DRAFT { background: var(--neutral); }
+  .res-detail { display: none; font-size: 0.82rem; color: #57606a; margin-top: 8px; line-height: 1.6; text-align: left; }
+  .res-detail.show { display: block; }
+  .res-empty { color: #57606a; font-size: 0.9rem; padding: 12px 0; }
 </style>
 </head>
 <body>
 
-<h1>🅿️ Campus Parking Reservations</h1>
-<p class="subtitle">Pick a date and time, then click a free spot.</p>
+<div class="topbar">
+  <div>
+    <h1>🅿️ Campus Parking Reservations</h1>
+    <p class="subtitle">Pick a date and time, then click a free spot.</p>
+  </div>
+  <div class="session-bar" id="sessionBar"></div>
+</div>
 
 <div class="card">
   <div class="row">
@@ -156,8 +205,17 @@
       <input type="time" id="start" value="09:00" />
     </div>
     <div class="field">
-      <label for="end">To</label>
-      <input type="time" id="end" value="10:00" />
+      <label for="duration">Duration</label>
+      <select id="duration">
+        <option value="30">30 minutes</option>
+        <option value="60" selected>1 hour</option>
+        <option value="90">1 hour 30 minutes</option>
+        <option value="120">2 hours</option>
+        <option value="150">2 hours 30 minutes</option>
+        <option value="180">3 hours</option>
+        <option value="210">3 hours 30 minutes</option>
+        <option value="240">4 hours</option>
+      </select>
     </div>
   </div>
 
@@ -194,10 +252,11 @@
   <div class="row">
     <input type="text" id="cancelId" placeholder="Reservation ID" />
   </div>
-  <button class="danger" id="cancelBtn">Cancel reservation</button>
+  <button class="danger full" id="cancelBtn">Cancel reservation</button>
   <div class="msg" id="cancelMsg"></div>
 </div>
 
+<!-- Reservation-confirmed popup -->
 <div class="modal-backdrop" id="modalBackdrop">
   <div class="modal">
     <h2>Reservation confirmed 🎉</h2>
@@ -207,10 +266,83 @@
   </div>
 </div>
 
+<!-- Login modal -->
+<div class="modal-backdrop" id="loginBackdrop">
+  <div class="modal">
+    <h2>Log in</h2>
+    <div class="field">
+      <label for="loginEmail">Email</label>
+      <input type="email" id="loginEmail" />
+    </div>
+    <div class="field">
+      <label for="loginPassword">Password</label>
+      <input type="password" id="loginPassword" />
+    </div>
+    <div class="actions">
+      <button class="primary" id="loginSubmitBtn">Log in</button>
+      <button class="secondary" id="loginCancelBtn">Cancel</button>
+    </div>
+    <div class="error" id="loginError"></div>
+    <div class="modal-switch">No account? <button class="link" id="showRegisterBtn">Register instead</button></div>
+  </div>
+</div>
+
+<!-- Register modal -->
+<div class="modal-backdrop" id="registerBackdrop">
+  <div class="modal wide">
+    <h2>Register</h2>
+    <div class="row">
+      <div class="field">
+        <label for="regFirstName">First name</label>
+        <input type="text" id="regFirstName" />
+      </div>
+      <div class="field">
+        <label for="regLastName">Last name</label>
+        <input type="text" id="regLastName" />
+      </div>
+    </div>
+    <div class="field">
+      <label for="regEmail">Email</label>
+      <input type="email" id="regEmail" />
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="regPhone">Telephone number</label>
+        <input type="tel" id="regPhone" />
+      </div>
+      <div class="field">
+        <label for="regDob">Date of birth</label>
+        <input type="date" id="regDob" />
+      </div>
+    </div>
+    <div class="field">
+      <label for="regPassword">Password (min 8 characters)</label>
+      <input type="password" id="regPassword" />
+    </div>
+    <div class="actions">
+      <button class="primary" id="registerSubmitBtn">Create account</button>
+      <button class="secondary" id="registerCancelBtn">Cancel</button>
+    </div>
+    <div class="error" id="registerError"></div>
+    <div class="modal-switch">Already have an account? <button class="link" id="showLoginBtn">Log in instead</button></div>
+  </div>
+</div>
+
+<!-- My reservations modal -->
+<div class="modal-backdrop" id="myResBackdrop">
+  <div class="modal wide">
+    <h2>My reservations</h2>
+    <div class="res-list" id="resList"></div>
+    <div class="actions">
+      <button class="secondary" id="myResCloseBtn">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const dateEl = document.getElementById('date');
 const startEl = document.getElementById('start');
-const endEl = document.getElementById('end');
+const durationEl = document.getElementById('duration');
 const gridEl = document.getElementById('grid');
 const hintEl = document.getElementById('hint');
 const detailsEl = document.getElementById('details');
@@ -225,20 +357,192 @@ const modalCloseBtn = document.getElementById('modalCloseBtn');
 const cancelIdEl = document.getElementById('cancelId');
 const cancelBtn = document.getElementById('cancelBtn');
 const cancelMsg = document.getElementById('cancelMsg');
+const sessionBar = document.getElementById('sessionBar');
+
+const loginBackdrop = document.getElementById('loginBackdrop');
+const loginEmail = document.getElementById('loginEmail');
+const loginPassword = document.getElementById('loginPassword');
+const loginSubmitBtn = document.getElementById('loginSubmitBtn');
+const loginCancelBtn = document.getElementById('loginCancelBtn');
+const loginError = document.getElementById('loginError');
+const showRegisterBtn = document.getElementById('showRegisterBtn');
+
+const registerBackdrop = document.getElementById('registerBackdrop');
+const regFirstName = document.getElementById('regFirstName');
+const regLastName = document.getElementById('regLastName');
+const regEmail = document.getElementById('regEmail');
+const regPhone = document.getElementById('regPhone');
+const regDob = document.getElementById('regDob');
+const regPassword = document.getElementById('regPassword');
+const registerSubmitBtn = document.getElementById('registerSubmitBtn');
+const registerCancelBtn = document.getElementById('registerCancelBtn');
+const registerError = document.getElementById('registerError');
+const showLoginBtn = document.getElementById('showLoginBtn');
+
+const myResBackdrop = document.getElementById('myResBackdrop');
+const resList = document.getElementById('resList');
+const myResCloseBtn = document.getElementById('myResCloseBtn');
 
 let selectedResourceId = null;
 let resourcesCache = [];
+let session = null; // { token, account } or null
 
-// Default the date picker to today.
-dateEl.value = new Date().toISOString().slice(0, 10);
+// ---------- session (localStorage is a per-browser convenience only;
+// the server is always the source of truth via /auth/me) ----------
+
+function loadStoredSession() {
+  try {
+    const raw = localStorage.getItem('parking_session');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeSession(s) {
+  session = s;
+  if (s) {
+    localStorage.setItem('parking_session', JSON.stringify(s));
+  } else {
+    localStorage.removeItem('parking_session');
+  }
+  renderSessionBar();
+  applySessionToForm();
+}
+
+function authHeaders() {
+  return session ? { 'Authorization': `Bearer ${session.token}` } : {};
+}
+
+function renderSessionBar() {
+  sessionBar.innerHTML = '';
+  if (session) {
+    const greeting = document.createElement('span');
+    greeting.className = 'greeting';
+    greeting.textContent = `Hi, ${session.account.first_name}`;
+    const myResBtn = document.createElement('button');
+    myResBtn.className = 'secondary';
+    myResBtn.textContent = 'My reservations';
+    myResBtn.addEventListener('click', openMyReservations);
+    const logoutBtn = document.createElement('button');
+    logoutBtn.className = 'secondary';
+    logoutBtn.textContent = 'Log out';
+    logoutBtn.addEventListener('click', logout);
+    sessionBar.append(greeting, myResBtn, logoutBtn);
+  } else {
+    const loginBtn = document.createElement('button');
+    loginBtn.className = 'secondary';
+    loginBtn.textContent = 'Log in';
+    loginBtn.addEventListener('click', () => openModal(loginBackdrop));
+    const registerBtn = document.createElement('button');
+    registerBtn.className = 'primary';
+    registerBtn.textContent = 'Register';
+    registerBtn.addEventListener('click', () => openModal(registerBackdrop));
+    sessionBar.append(loginBtn, registerBtn);
+  }
+}
+
+function applySessionToForm() {
+  if (session) {
+    nameEl.value = `${session.account.first_name} ${session.account.last_name}`;
+    nameEl.disabled = true;
+  } else {
+    nameEl.disabled = false;
+    if (nameEl.value === (nameEl.dataset.lastAuto || '')) nameEl.value = '';
+  }
+  nameEl.dataset.lastAuto = nameEl.value;
+}
+
+async function logout() {
+  await fetch('/auth/logout', { method: 'POST', headers: authHeaders() });
+  storeSession(null);
+}
+
+function openModal(el) { el.classList.add('show'); }
+function closeModal(el) { el.classList.remove('show'); }
+
+showRegisterBtn.addEventListener('click', () => { closeModal(loginBackdrop); openModal(registerBackdrop); });
+showLoginBtn.addEventListener('click', () => { closeModal(registerBackdrop); openModal(loginBackdrop); });
+loginCancelBtn.addEventListener('click', () => closeModal(loginBackdrop));
+registerCancelBtn.addEventListener('click', () => closeModal(registerBackdrop));
+
+loginSubmitBtn.addEventListener('click', async () => {
+  loginError.textContent = '';
+  try {
+    const res = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: loginEmail.value.trim(), password: loginPassword.value }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Could not log in.');
+    storeSession(data);
+    loginEmail.value = '';
+    loginPassword.value = '';
+    closeModal(loginBackdrop);
+  } catch (err) {
+    loginError.textContent = err.message;
+  }
+});
+
+registerSubmitBtn.addEventListener('click', async () => {
+  registerError.textContent = '';
+  try {
+    const res = await fetch('/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        first_name: regFirstName.value.trim(),
+        last_name: regLastName.value.trim(),
+        email: regEmail.value.trim(),
+        phone: regPhone.value.trim() || null,
+        date_of_birth: regDob.value || null,
+        password: regPassword.value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Could not register.');
+    storeSession(data);
+    [regFirstName, regLastName, regEmail, regPhone, regDob, regPassword].forEach(el => el.value = '');
+    closeModal(registerBackdrop);
+  } catch (err) {
+    registerError.textContent = err.message;
+  }
+});
+
+// ---------- date/time: only "now" forward, in 30-minute-multiple durations ----------
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function pad(n) { return String(n).padStart(2, '0'); }
+
+function updateStartMin() {
+  if (dateEl.value === todayStr()) {
+    const now = new Date();
+    // round up to the next 5 minutes so "now" is never technically in the past by the time it's submitted
+    now.setMinutes(now.getMinutes() + 5);
+    startEl.min = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    if (startEl.value && startEl.value < startEl.min) startEl.value = startEl.min;
+  } else {
+    startEl.removeAttribute('min');
+  }
+}
+
+dateEl.min = todayStr();
+dateEl.value = todayStr();
+updateStartMin();
 
 function isoRange() {
-  if (!dateEl.value || !startEl.value || !endEl.value) return null;
-  return {
-    start: `${dateEl.value}T${startEl.value}:00`,
-    end: `${dateEl.value}T${endEl.value}:00`,
-  };
+  if (!dateEl.value || !startEl.value) return null;
+  const start = new Date(`${dateEl.value}T${startEl.value}:00`);
+  const end = new Date(start.getTime() + Number(durationEl.value) * 60000);
+  const fmt = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+  return { start: fmt(start), end: fmt(end) };
 }
+
+// ---------- spot grid ----------
 
 async function loadResources() {
   const res = await fetch('/resources');
@@ -284,7 +588,6 @@ async function refreshAvailability() {
   const data = await res.json();
   const byId = {};
   data.forEach(d => byId[d.id] = d.available);
-  // If the currently selected spot became unavailable (e.g. time changed), deselect it.
   if (selectedResourceId && !byId[selectedResourceId]) {
     selectedResourceId = null;
     detailsEl.classList.remove('show');
@@ -297,15 +600,15 @@ function selectSpot(id) {
   selectedResourceId = id;
   detailsEl.classList.add('show');
   formError.textContent = '';
-  refreshAvailability(); // re-render so the selection highlight shows
+  refreshAvailability();
 }
 
 function resetForm() {
   selectedResourceId = null;
-  nameEl.value = '';
   plateEl.value = '';
   formError.textContent = '';
   detailsEl.classList.remove('show');
+  applySessionToForm();
   refreshAvailability();
 }
 
@@ -324,7 +627,7 @@ async function confirmReservation() {
   try {
     const createRes = await fetch('/reservations', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         resource_id: selectedResourceId,
         user_id: plateEl.value.trim(),
@@ -341,7 +644,7 @@ async function confirmReservation() {
     if (!confirmRes.ok) throw new Error(confirmed.detail || 'Could not confirm reservation.');
 
     modalId.textContent = confirmed.id;
-    modalBackdrop.classList.add('show');
+    openModal(modalBackdrop);
     resetForm();
   } catch (err) {
     formError.textContent = err.message;
@@ -350,7 +653,15 @@ async function confirmReservation() {
   }
 }
 
-async function cancelReservation() {
+async function cancelReservationById(id, onDone) {
+  const res = await fetch(`/reservations/${id}/cancel`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || 'Could not cancel reservation.');
+  if (onDone) onDone(data);
+  return data;
+}
+
+cancelBtn.addEventListener('click', async () => {
   cancelMsg.textContent = '';
   const id = cancelIdEl.value.trim();
   if (!id) {
@@ -358,9 +669,7 @@ async function cancelReservation() {
     return;
   }
   try {
-    const res = await fetch(`/reservations/${id}/cancel`, { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Could not cancel reservation.');
+    const data = await cancelReservationById(id);
     cancelMsg.textContent = `Reservation ${data.id} cancelled.`;
     cancelMsg.style.color = 'var(--free)';
     cancelIdEl.value = '';
@@ -369,17 +678,123 @@ async function cancelReservation() {
     cancelMsg.textContent = err.message;
     cancelMsg.style.color = 'var(--taken)';
   }
+});
+
+// ---------- my reservations ----------
+
+function formatRange(startIso, endIso) {
+  const s = new Date(startIso);
+  const e = new Date(endIso);
+  const dateStr = s.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  const t = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${dateStr} · ${t(s)}–${t(e)}`;
 }
 
-dateEl.addEventListener('change', refreshAvailability);
+function resourceLabel(id) {
+  const r = resourcesCache.find(r => r.id === id);
+  return r ? r.label : id;
+}
+
+async function openMyReservations() {
+  openModal(myResBackdrop);
+  resList.innerHTML = '<div class="res-empty">Loading...</div>';
+  try {
+    const res = await fetch('/reservations/mine', { headers: authHeaders() });
+    if (res.status === 401) {
+      storeSession(null);
+      resList.innerHTML = '<div class="res-empty">Please log in again.</div>';
+      return;
+    }
+    const rows = await res.json();
+    renderMyReservations(rows);
+  } catch {
+    resList.innerHTML = '<div class="res-empty">Could not load your reservations.</div>';
+  }
+}
+
+function renderMyReservations(rows) {
+  resList.innerHTML = '';
+  if (rows.length === 0) {
+    resList.innerHTML = '<div class="res-empty">You have no reservations yet.</div>';
+    return;
+  }
+  rows.forEach(r => {
+    const row = document.createElement('div');
+    row.className = 'res-row';
+
+    const summary = document.createElement('div');
+    summary.className = 'res-summary';
+
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.innerHTML = `${resourceLabel(r.resource_id)} · ${formatRange(r.start_time, r.end_time)}` +
+      `<span class="res-state ${r.state}">${r.state}</span>`;
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'danger';
+    delBtn.textContent = 'Delete';
+    delBtn.disabled = r.state === 'CANCELLED';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      delBtn.disabled = true;
+      try {
+        await cancelReservationById(r.id);
+        openMyReservations(); // refresh the list
+        refreshAvailability();
+      } catch (err) {
+        alert(err.message);
+        delBtn.disabled = false;
+      }
+    });
+
+    summary.append(label, delBtn);
+
+    const detail = document.createElement('div');
+    detail.className = 'res-detail';
+    detail.innerHTML = `
+      <div>Reservation ID: <code>${r.id}</code></div>
+      <div>Spot: ${resourceLabel(r.resource_id)} (${r.resource_id})</div>
+      <div>Name: ${r.user_name || '—'}</div>
+      <div>Plate: ${r.user_id}</div>
+      <div>State: ${r.state}</div>
+    `;
+
+    summary.addEventListener('click', () => detail.classList.toggle('show'));
+
+    row.append(summary, detail);
+    resList.appendChild(row);
+  });
+}
+
+myResCloseBtn.addEventListener('click', () => closeModal(myResBackdrop));
+
+// ---------- wiring ----------
+
+dateEl.addEventListener('change', () => { updateStartMin(); refreshAvailability(); });
 startEl.addEventListener('change', refreshAvailability);
-endEl.addEventListener('change', refreshAvailability);
+durationEl.addEventListener('change', refreshAvailability);
 confirmBtn.addEventListener('click', confirmReservation);
 clearBtn.addEventListener('click', resetForm);
-cancelBtn.addEventListener('click', cancelReservation);
-modalCloseBtn.addEventListener('click', () => modalBackdrop.classList.remove('show'));
+modalCloseBtn.addEventListener('click', () => closeModal(modalBackdrop));
 
-loadResources().then(refreshAvailability);
+// ---------- init ----------
+
+(async function init() {
+  const stored = loadStoredSession();
+  if (stored) {
+    // verify the token is still valid server-side before trusting it
+    const res = await fetch('/auth/me', { headers: { 'Authorization': `Bearer ${stored.token}` } });
+    if (res.ok) {
+      session = stored;
+    } else {
+      localStorage.removeItem('parking_session');
+    }
+  }
+  renderSessionBar();
+  applySessionToForm();
+  await loadResources();
+  await refreshAvailability();
+})();
 </script>
 </body>
 </html>

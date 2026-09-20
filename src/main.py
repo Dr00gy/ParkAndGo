@@ -128,9 +128,10 @@ def _account_from_authorization(session, authorization: str | None):
 
 
 @app.post("/reservations", response_model=ReservationResponse)
-def create_reservation(req: CreateReservationRequest):
+def create_reservation(req: CreateReservationRequest, authorization: str | None = Header(None)):
     session = SessionLocal()
     try:
+        account = _account_from_authorization(session, authorization)
         reservation = services.create_draft(
             session,
             req.resource_id,
@@ -138,6 +139,7 @@ def create_reservation(req: CreateReservationRequest):
             req.start_time,
             req.end_time,
             user_name=req.user_name,
+            account_id=account.id if account else None,
         )
         return _to_response(reservation)
     except services.ReservationError as e:
@@ -219,5 +221,75 @@ def availability_grid(start_time: datetime, end_time: datetime):
             )
             for r in resources
         ]
+    finally:
+        session.close()
+
+
+@app.get("/reservations/mine", response_model=list[ReservationResponse])
+def my_reservations(authorization: str | None = Header(None)):
+    session = SessionLocal()
+    try:
+        account = _account_from_authorization(session, authorization)
+        if account is None:
+            raise HTTPException(status_code=401, detail="login required")
+        rows = services.list_reservations_for_account(session, account.id)
+        return [_to_response(r) for r in rows]
+    finally:
+        session.close()
+
+
+@app.post("/auth/register", response_model=SessionResponse)
+def register(req: RegisterRequest):
+    session = SessionLocal()
+    try:
+        account = accounts_service.register(
+            session,
+            req.first_name,
+            req.last_name,
+            req.email,
+            req.phone,
+            req.date_of_birth,
+            req.password,
+        )
+        token = accounts_service.create_session(session, account)
+        return SessionResponse(token=token, account=_account_to_response(account))
+    except accounts_service.AccountError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/auth/login", response_model=SessionResponse)
+def login(req: LoginRequest):
+    session = SessionLocal()
+    try:
+        account = accounts_service.login(session, req.email, req.password)
+        token = accounts_service.create_session(session, account)
+        return SessionResponse(token=token, account=_account_to_response(account))
+    except accounts_service.AccountError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/auth/logout")
+def logout(authorization: str | None = Header(None)):
+    session = SessionLocal()
+    try:
+        if authorization and authorization.startswith("Bearer "):
+            accounts_service.delete_session(session, authorization[len("Bearer ") :].strip())
+        return {"ok": True}
+    finally:
+        session.close()
+
+
+@app.get("/auth/me", response_model=AccountResponse)
+def me(authorization: str | None = Header(None)):
+    session = SessionLocal()
+    try:
+        account = _account_from_authorization(session, authorization)
+        if account is None:
+            raise HTTPException(status_code=401, detail="not logged in")
+        return _account_to_response(account)
     finally:
         session.close()
