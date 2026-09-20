@@ -87,3 +87,23 @@ stdlib-only — see `src/auth.py`). Logging in issues a session token stored
 in the database (`sessions` table), sent back as `Authorization: Bearer
 <token>` on later requests. A reservation made while logged in is tagged
 with `account_id`, which is what `/reservations/mine` filters on.
+
+## CP1 walking skeleton
+The following end-to-end path must be truly runnable after C03 / before C04:
+
+```
+POST /reservations
+  → validate    (operating hours; well-formed request body)
+  → persist     (write a DRAFT reservation row to the database)
+  → return reservation ID
+  → automated check   (an automated test creates a reservation via the API
+                        and asserts a 200 response with a valid, persisted
+                        reservation ID — see tests/test_persistence_spike.py
+                        for the persistence half of this today; a
+                        dedicated end-to-end API test is the remaining
+                        piece for CP1 itself)
+```
+
+Today, `create_draft` → `confirm` → `check_availability` already works
+end-to-end through the API (verified manually via FastAPI's test client);
+formalizing that as an automated API-level test is part of CP1.
