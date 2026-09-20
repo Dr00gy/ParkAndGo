@@ -96,6 +96,13 @@ class SessionResponse(BaseModel):
     account: AccountResponse
 
 
+class ConfigResponse(BaseModel):
+    operating_hours_start: str
+    operating_hours_end: str
+    step_minutes: int
+    max_duration_minutes: int
+
+
 def _to_response(r) -> ReservationResponse:
     return ReservationResponse(
         id=r.id,
@@ -161,11 +168,16 @@ def confirm_reservation(reservation_id: str):
 
 
 @app.post("/reservations/{reservation_id}/cancel", response_model=ReservationResponse)
-def cancel_reservation(reservation_id: str):
+def cancel_reservation(reservation_id: str, authorization: str | None = Header(None)):
     session = SessionLocal()
     try:
-        reservation = services.cancel(session, reservation_id)
+        account = _account_from_authorization(session, authorization)
+        reservation = services.cancel(
+            session, reservation_id, requesting_account_id=account.id if account else None
+        )
         return _to_response(reservation)
+    except services.NotAuthorizedError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except services.ReservationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
@@ -191,6 +203,19 @@ def availability(resource_id: str, start_time: datetime, end_time: datetime):
         return {"available": services.check_availability(session, resource_id, start_time, end_time)}
     finally:
         session.close()
+
+
+@app.get("/config", response_model=ConfigResponse)
+def config():
+    """The business-rule constants the UI needs to explain *why* a slot is
+    unavailable (outside operating hours vs. actually booked), sourced from
+    services.py so there's exactly one place these numbers live."""
+    return ConfigResponse(
+        operating_hours_start=services.OPERATING_HOURS_START.strftime("%H:%M"),
+        operating_hours_end=services.OPERATING_HOURS_END.strftime("%H:%M"),
+        step_minutes=services.RESERVATION_STEP_MINUTES,
+        max_duration_minutes=services.MAX_DURATION_MINUTES,
+    )
 
 
 @app.get("/resources", response_model=list[ResourceResponse])

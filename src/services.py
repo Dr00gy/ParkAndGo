@@ -28,6 +28,15 @@ class ReservationError(Exception):
     """Raised when a requested operation violates a business rule."""
 
 
+class NotAuthorizedError(ReservationError):
+    """Raised when the requester is not allowed to act on this reservation.
+
+    Kept as a subclass of ReservationError so existing callers that only
+    catch ReservationError still catch this too; main.py catches it
+    specifically first to return 403 instead of 400.
+    """
+
+
 def _within_operating_hours(start_time: datetime, end_time: datetime) -> bool:
     if end_time <= start_time:
         return False
@@ -139,12 +148,31 @@ def confirm(
     return reservation
 
 
-def cancel(session: Session, reservation_id: str) -> ReservationORM:
+def cancel(
+    session: Session,
+    reservation_id: str,
+    requesting_account_id: str | None = None,
+) -> ReservationORM:
     reservation = session.get(ReservationORM, reservation_id)
     if reservation is None:
         raise ReservationError(f"no reservation with id {reservation_id}")
     if reservation.state == ReservationState.CANCELLED:
         raise ReservationError("reservation is already cancelled")
+
+    # Ownership check: an account-tied reservation can only be cancelled by
+    # that same account; an anonymous reservation can only be cancelled
+    # anonymously. This closes the gap where the reservation ID alone used
+    # to be enough to cancel anyone's booking.
+    if reservation.account_id is not None:
+        if requesting_account_id != reservation.account_id:
+            raise NotAuthorizedError(
+                "you are not authorized to cancel this reservation"
+            )
+    elif requesting_account_id is not None:
+        raise NotAuthorizedError(
+            "you are not authorized to cancel this reservation"
+        )
+
     reservation.state = ReservationState.CANCELLED
     session.commit()
     return reservation
