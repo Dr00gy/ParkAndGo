@@ -31,7 +31,7 @@ Confirmed - reserved space. Draft and cancelled - not a reserved space.
 Confirmed reservations for the same resource must not overlap.
 
 ## Domain-specific business rule
-Reservation must start and end within the campus parking operating hours (06:00-23:00).
+Reservation must start and end within the campus parking operating hours (06:00-23:00). A reservation's start time must not be in the past. A reservation's duration must be a multiple of 30 minutes, up to 4 hours.
 
 ## External / system boundary
 Notification about a successful reservation (Notification Service).

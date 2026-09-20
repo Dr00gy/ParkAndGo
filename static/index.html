@@ -73,6 +73,7 @@
   .spot:hover:not(:disabled) { transform: translateY(-2px); }
   .spot.free { background: var(--free); }
   .spot.taken { background: var(--taken); cursor: not-allowed; opacity: 0.75; }
+  .spot.closed { background: var(--neutral); cursor: not-allowed; opacity: 0.55; }
   .spot.selected { background: var(--selected); outline: 3px solid #1e40af55; }
   .spot:disabled { cursor: not-allowed; }
   .hint { font-size: 0.85rem; color: #57606a; margin-top: 10px; }
@@ -222,6 +223,7 @@
   <div class="legend">
     <span><span class="swatch" style="background:var(--free)"></span>Free</span>
     <span><span class="swatch" style="background:var(--taken)"></span>Taken</span>
+    <span><span class="swatch" style="background:var(--neutral)"></span>Outside hours</span>
     <span><span class="swatch" style="background:var(--selected)"></span>Selected</span>
   </div>
 
@@ -386,6 +388,7 @@ const myResCloseBtn = document.getElementById('myResCloseBtn');
 let selectedResourceId = null;
 let resourcesCache = [];
 let session = null; // { token, account } or null
+let appConfig = { operating_hours_start: '06:00', operating_hours_end: '23:00' }; // fallback until /config loads
 
 // ---------- session (localStorage is a per-browser convenience only;
 // the server is always the source of truth via /auth/me) ----------
@@ -544,13 +547,34 @@ function isoRange() {
 
 // ---------- spot grid ----------
 
+async function loadConfig() {
+  try {
+    const res = await fetch('/config');
+    if (res.ok) appConfig = await res.json();
+  } catch {
+    // keep the fallback defaults above -- worst case the "outside hours"
+    // message is slightly stale, availability itself is still authoritative
+  }
+}
+
+function isWithinOperatingHours(startIso, endIso) {
+  const startTime = startIso.slice(11, 16); // "HH:MM"
+  const endTime = endIso.slice(11, 16);
+  return (
+    startTime >= appConfig.operating_hours_start &&
+    startTime <= appConfig.operating_hours_end &&
+    endTime >= appConfig.operating_hours_start &&
+    endTime <= appConfig.operating_hours_end
+  );
+}
+
 async function loadResources() {
   const res = await fetch('/resources');
   resourcesCache = await res.json();
   renderGrid(null);
 }
 
-function renderGrid(availabilityById) {
+function renderGrid(availabilityById, closed) {
   gridEl.innerHTML = '';
   resourcesCache.forEach(r => {
     const btn = document.createElement('button');
@@ -558,7 +582,10 @@ function renderGrid(availabilityById) {
     btn.textContent = r.label;
     btn.dataset.id = r.id;
 
-    if (availabilityById) {
+    if (closed) {
+      btn.classList.add('closed');
+      btn.disabled = true;
+    } else if (availabilityById) {
       const available = availabilityById[r.id];
       btn.classList.add(available ? 'free' : 'taken');
       btn.disabled = !available;
@@ -578,6 +605,19 @@ function renderGrid(availabilityById) {
 async function refreshAvailability() {
   const range = isoRange();
   if (!range) return;
+
+  if (!isWithinOperatingHours(range.start, range.end)) {
+    if (selectedResourceId) {
+      selectedResourceId = null;
+      detailsEl.classList.remove('show');
+    }
+    renderGrid(null, /* closed */ true);
+    hintEl.textContent =
+      `Campus parking operates ${appConfig.operating_hours_start}\u2013${appConfig.operating_hours_end}. ` +
+      `Pick a start time and duration that both fall within those hours.`;
+    return;
+  }
+
   hintEl.textContent = 'Checking availability...';
   const url = `/availability-grid?start_time=${encodeURIComponent(range.start)}&end_time=${encodeURIComponent(range.end)}`;
   const res = await fetch(url);
@@ -592,8 +632,12 @@ async function refreshAvailability() {
     selectedResourceId = null;
     detailsEl.classList.remove('show');
   }
-  renderGrid(byId);
-  hintEl.textContent = 'Green spots are free -- click one to reserve it.';
+  renderGrid(byId, /* closed */ false);
+  if (data.length > 0 && data.every(d => !d.available)) {
+    hintEl.textContent = 'Every spot is already booked for this time -- try another slot.';
+  } else {
+    hintEl.textContent = 'Green spots are free -- click one to reserve it.';
+  }
 }
 
 function selectSpot(id) {
@@ -654,7 +698,7 @@ async function confirmReservation() {
 }
 
 async function cancelReservationById(id, onDone) {
-  const res = await fetch(`/reservations/${id}/cancel`, { method: 'POST' });
+  const res = await fetch(`/reservations/${id}/cancel`, { method: 'POST', headers: authHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data.detail || 'Could not cancel reservation.');
   if (onDone) onDone(data);
@@ -792,6 +836,7 @@ modalCloseBtn.addEventListener('click', () => closeModal(modalBackdrop));
   }
   renderSessionBar();
   applySessionToForm();
+  await loadConfig();
   await loadResources();
   await refreshAvailability();
 })();

@@ -47,11 +47,11 @@ python -m pytest -v
 ```bash
 uvicorn src.main:app --reload
 ```
-Interactive API docs (Swagger) are then at `http://127.0.0.1:8001/docs`.
+Interactive API docs (Swagger) are then at `http://127.0.0.1:8000/docs`.
 
 ### Web UI
 A simple point-and-click reservation page is served at
-`http://127.0.0.1:8001/ui/`. Pick a date, a start time, and a duration
+`http://127.0.0.1:8000/ui/`. Pick a date, a start time, and a duration
 (30-minute increments up to 4 hours), then click a free (green) spot, fill
 in your name and plate number, and confirm — you'll get a popup with your
 reservation ID. Taken spots are shown in red and can't be clicked, like
@@ -70,7 +70,7 @@ release any spot (yours or not — see the security note below).
 
 ### Example request
 ```bash
-curl -X POST http://127.0.0.1:8001/reservations \
+curl -X POST http://127.0.0.1:8000/reservations \
   -H "Content-Type: application/json" \
   -d '{
         "resource_id": "spot-1",
@@ -80,13 +80,21 @@ curl -X POST http://127.0.0.1:8001/reservations \
       }'
 ```
 
+## Accounts
+Registering stores first name, last name, email (unique), phone, date of
+birth, and a password (hashed with PBKDF2-HMAC-SHA256 + a per-account salt,
+stdlib-only — see `src/auth.py`). Logging in issues a session token stored
+in the database (`sessions` table), sent back as `Authorization: Bearer
+<token>` on later requests. A reservation made while logged in is tagged
+with `account_id`, which is what `/reservations/mine` filters on.
+
 ## CP1 walking skeleton
 The following end-to-end path must be truly runnable after C03 / before C04:
 
 ```
 POST /reservations
   → validate    (operating hours; well-formed request body)
-  → persist     (write a DRAFT reservation row to the database)
+  → persist     (write a reservation row to the database)
   → return reservation ID
   → automated check   (an automated test creates a reservation via the API
                         and asserts a 200 response with a valid, persisted
@@ -99,35 +107,3 @@ POST /reservations
 Today, `create_draft` → `confirm` → `check_availability` already works
 end-to-end through the API (verified manually via FastAPI's test client);
 formalizing that as an automated API-level test is part of CP1.
-
-## Business rules implemented
-- Two `CONFIRMED` reservations for the same parking spot must not overlap.
-- A reservation must start and end within campus parking operating hours
-  (06:00–23:00).
-- A reservation's start time must not be in the past.
-- A reservation's duration must be a multiple of 30 minutes, up to 4 hours.
-
-## Accounts
-Registering stores first name, last name, email (unique), phone, date of
-birth, and a password (hashed with PBKDF2-HMAC-SHA256 + a per-account salt,
-stdlib-only — see `src/auth.py`). Logging in issues a session token stored
-in the database (`sessions` table), sent back as `Authorization: Bearer
-<token>` on later requests. A reservation made while logged in is tagged
-with `account_id`, which is what `/reservations/mine` filters on.
-
-**Known simplification:** cancelling a reservation by ID doesn't check
-that the canceller is the person who booked it — anyone with the ID can
-cancel it. Fine for a course demo; a real system would check
-`account_id` (or require the plate number) before allowing a cancel.
-
-## Known open question
-Whether `DRAFT` reservations should auto-expire after a period of
-inactivity is not yet decided — see `docs/intent-and-change.md` → Unknown.
-
-## Team workflow steps still to do (manual, on GitHub)
-These require actual team members and can't be done for you:
-1. Create an issue/task named **"C01 engineering spike"**.
-2. Have one team member make a change (e.g. adding a new business rule
-   or extending a test), and a different team member review it via a pull
-   request before merging.
-3. Merge only after that review.
