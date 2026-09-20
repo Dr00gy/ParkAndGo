@@ -94,7 +94,7 @@ The following end-to-end path must be truly runnable after C03 / before C04:
 ```
 POST /reservations
   → validate    (operating hours; well-formed request body)
-  → persist     (write a DRAFT reservation row to the database)
+  → persist     (write a reservation row to the database)
   → return reservation ID
   → automated check   (an automated test creates a reservation via the API
                         and asserts a 200 response with a valid, persisted
