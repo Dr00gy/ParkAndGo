@@ -59,3 +59,41 @@ recorded so they aren't lost):
    single-process demo this is one of the first things to swap (e.g. for
    Postgres), consistent with the "Persistence" rationale in
    `architecture-and-decisions.md`.
+
+# C02 Specification — Running application
+
+## Accepted baseline
+
+## Demonstrated basic operations
+
+## Realised verification examples
+
+## Found issue / misalignment and a practical solution
+
+## Summary of after-effects caused by the changes
+
+## Remaining premise / unknown
+
+## Architecture drivers translated into C03
+
+## Commit / tag of the app
+
+## After-effects of changes in C02 in-depth
+
+### Changed conditional
+
+### Affected requirements or parts of specification
+
+### Unaffected reqs. or parts and why
+
+### New actor in the system or operation
+
+### Changed rules or semantics of a state
+
+### Change of Use Case diagrams
+
+### Change of State diagrams
+
+### New Use Cases
+
+### Architecture drivers for C03
