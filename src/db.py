@@ -41,6 +41,7 @@ class AccountORM(Base):
     date_of_birth = Column(Date, nullable=True)
     password_hash = Column(String, nullable=False)
     password_salt = Column(String, nullable=False)
+    is_admin = Column(Boolean, default=False, nullable=False)
 
 
 class SessionORM(Base):
@@ -63,6 +64,7 @@ class ReservationORM(Base):
     start_time = Column(DateTime, nullable=False)
     end_time = Column(DateTime, nullable=False)
     state = Column(SAEnum(ReservationState), nullable=False, default=ReservationState.DRAFT)
+    approval_expires_at = Column(DateTime, nullable=True)
 
 
 def get_engine(db_url: str = "sqlite:///parking.db"):
@@ -88,6 +90,7 @@ SEED_RESOURCES = [
     ("spot-6", "Lot B - Spot 2"),
     ("spot-7", "Lot B - Spot 3"),
     ("spot-8", "Lot B - Spot 4"),
+    ("spot-8", "VIP Lot - Spot 1 (Requires Approval)", True),
 ]
 
 

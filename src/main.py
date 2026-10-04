@@ -196,6 +196,66 @@ def prolong_reservation(reservation_id: str, req: ProlongRequest):
         session.close()
 
 
+@app.post("/reservations/{reservation_id}/approve", response_model=ReservationResponse)
+def approve_reservation(reservation_id: str, authorization: str | None = Header(None)):
+    session = SessionLocal()
+    try:
+        account = _account_from_authorization(session, authorization)
+        # Ověření, že uživatel je přihlášen a má oprávnění administrátora
+        if not account or not getattr(account, "is_admin", False):
+            raise HTTPException(status_code=403, detail="Admin privileges required")
+            
+        reservation = services.approve(
+            session, 
+            reservation_id, 
+            admin_account_id=account.id, 
+            notifier=notifier
+        )
+        return _to_response(reservation)
+    except services.ReservationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/reservations/{reservation_id}/reject", response_model=ReservationResponse)
+def reject_reservation(reservation_id: str, authorization: str | None = Header(None)):
+    session = SessionLocal()
+    try:
+        account = _account_from_authorization(session, authorization)
+        if not account or not getattr(account, "is_admin", False):
+            raise HTTPException(status_code=403, detail="Admin privileges required")
+            
+        reservation = services.reject(
+            session, 
+            reservation_id, 
+            admin_account_id=account.id, 
+            notifier=notifier
+        )
+        return _to_response(reservation)
+    except services.ReservationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/admin/reservations/trigger-expiration")
+def trigger_expiration(authorization: str | None = Header(None)):
+    """
+    Pomocný endpoint pro ruční spuštění kontroly expirovaných rezervací.
+    Lze ho volat i periodicky cronem.
+    """
+    session = SessionLocal()
+    try:
+        account = _account_from_authorization(session, authorization)
+        if not account or not getattr(account, "is_admin", False):
+            raise HTTPException(status_code=403, detail="Admin privileges required")
+            
+        expired_count = services.expire_pending(session)
+        return {"ok": True, "expired_count": expired_count}
+    finally:
+        session.close()
+
 @app.get("/availability")
 def availability(resource_id: str, start_time: datetime, end_time: datetime):
     session = SessionLocal()
