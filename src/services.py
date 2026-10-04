@@ -8,10 +8,12 @@ Encodes the rules from the Project Frame:
 """
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from sqlalchemy.orm import Session
 
 from .db import ReservationORM
+from .db import ResourceORM
+
 from .models import Reservation, ReservationState
 from .notification import NotificationService
 
@@ -142,6 +144,13 @@ def confirm(
     ):
         raise ReservationError("resource already has an overlapping confirmed reservation")
 
+    resource = session.get(ResourceORM, reservation.resource_id)
+    if resource and getattr(resource, 'requires_approval', False):
+        reservation.state = ReservationState.PENDING_APPROVAL
+        reservation.approval_expires_at = datetime.now() + timedelta(hours=24)
+        session.commit()
+        return reservation
+
     reservation.state = ReservationState.CONFIRMED
     session.commit()
     notifier.send_reservation_confirmed(reservation.user_id, reservation.id)
@@ -212,3 +221,73 @@ def list_reservations_for_account(session: Session, account_id: str) -> list[Res
         .order_by(ReservationORM.start_time.desc())
         .all()
     )
+
+def approve(
+    session: Session,
+    reservation_id: str,
+    admin_account_id: str,
+    notifier: NotificationService
+) -> ReservationORM:
+    """Admin schválí rezervaci, která čeká na potvrzení."""
+    reservation = session.get(ReservationORM, reservation_id)
+    if reservation is None:
+        raise ReservationError(f"no reservation with id {reservation_id}")
+    
+    if reservation.state != ReservationState.PENDING_APPROVAL:
+        raise ReservationError("only reservations in PENDING_APPROVAL state can be approved")
+    
+    # Musíme znovu zkontrolovat překryv, protože během čekání mohl místo obsadit někdo jiný 
+    # (např. admin schválil jinou rezervaci na stejný čas)
+    if _has_overlapping_confirmed(
+        session,
+        reservation.resource_id,
+        reservation.start_time,
+        reservation.end_time,
+        exclude_reservation_id=reservation.id,
+    ):
+        raise ReservationError("resource already has an overlapping confirmed reservation, cannot approve")
+
+    reservation.state = ReservationState.CONFIRMED
+    reservation.approval_expires_at = None # Už neexpiruje
+    session.commit()
+    notifier.send_reservation_confirmed(reservation.user_id, reservation.id)
+    return reservation
+
+def reject(
+    session: Session,
+    reservation_id: str,
+    admin_account_id: str,
+    notifier: NotificationService
+) -> ReservationORM:
+    """Admin zamítne rezervaci, která čeká na potvrzení."""
+    reservation = session.get(ReservationORM, reservation_id)
+    if reservation is None:
+        raise ReservationError(f"no reservation with id {reservation_id}")
+    
+    if reservation.state != ReservationState.PENDING_APPROVAL:
+        raise ReservationError("only reservations in PENDING_APPROVAL state can be rejected")
+        
+    reservation.state = ReservationState.REJECTED
+    reservation.approval_expires_at = None
+    session.commit()
+    # Volitelně: notifier.send_reservation_rejected(reservation.user_id, reservation.id)
+    return reservation
+
+def expire_pending(session: Session) -> int:
+    """
+    Vyhledá všechny rezervace, kterým vypršel čas na schválení, a zruší je.
+    Tuto funkci může volat např. cron job nebo background worker.
+    """
+    expired_reservations = session.query(ReservationORM).filter(
+        ReservationORM.state == ReservationState.PENDING_APPROVAL,
+        ReservationORM.approval_expires_at < datetime.now()
+    ).all()
+
+    for res in expired_reservations:
+        res.state = ReservationState.EXPIRED
+        res.approval_expires_at = None
+
+    if expired_reservations:
+        session.commit()
+        
+    return len(expired_reservations)

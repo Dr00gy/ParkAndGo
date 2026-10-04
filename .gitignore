@@ -1,0 +1,35 @@
+# -----------------------------
+# Databáze
+# -----------------------------
+# Lokální SQLite databáze (nechceme přepisovat data ostatním vývojářům)
+parking.db
+*.sqlite3
+
+# -----------------------------
+# Python kompilované soubory
+# -----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# -----------------------------
+# Testování (používáš pytest)
+# -----------------------------
+.pytest_cache/
+.coverage
+htmlcov/
+
+# -----------------------------
+# Virtuální prostředí (pro jistotu, i když ho ve výpisu zatím nevidím)
+# -----------------------------
+venv/
+env/
+.venv/
+.env
+
+# -----------------------------
+# IDE a OS soubory
+# -----------------------------
+.vscode/
+.idea/
+.DS_Store

@@ -15,6 +15,9 @@ class ReservationState(str, Enum):
     DRAFT = "DRAFT"
     CONFIRMED = "CONFIRMED"
     CANCELLED = "CANCELLED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
 
 
 @dataclass
@@ -22,6 +25,7 @@ class Resource:
     """A reservable parking spot."""
     id: str
     label: str  # e.g. "Lot A - Spot 12"
+    requires_approval = Column(Boolean, default=False)
 
 
 @dataclass
@@ -39,6 +43,7 @@ class Reservation:
     start_time: datetime
     end_time: datetime
     state: ReservationState = ReservationState.DRAFT
+    approval_expires_at: datetime | None = None
 
     @staticmethod
     def new_id() -> str:
