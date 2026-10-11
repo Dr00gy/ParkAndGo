@@ -1,19 +1,30 @@
-"""Application/business logic for reservations.
+"""Application/business logic for reservations: lifecycle + the core rules.
 
-Encodes the rules from the Project Frame:
-- common rule: two CONFIRMED reservations of the same resource must not overlap
-- domain-specific rule: a reservation must start and end within campus
-  parking operating hours
-- state machine: DRAFT -> CONFIRMED -> CANCELLED
+Encodes the rules from the Project Frame / specification:
+- BR-01 interval semantics ([start,end))
+- BR-02 common rule: two CONFIRMED reservations of the same resource must
+  not overlap
+- BR-03 lifecycle: DRAFT -> CONFIRMED -> CANCELLED (+ the approval branch)
+- BR-04 domain-specific rule: campus parking operating hours
+- BR-05 a reservation's start time must not be in the past
+- BR-06 duration must be a multiple of 30 minutes, up to 4 hours
+- BR-07 cancellation authorization (ownership)
+
+C03 architecture decision (see docs/architecture-and-decisions.md, ADR-01):
+this module owns the Reservation lifecycle EXCEPT the outcome of an
+approval decision. It performs the single entry transition
+DRAFT -> PENDING_APPROVAL (inside confirm(), when the resource requires
+approval), but it never sets REJECTED or EXPIRED, and it is not the one
+that decides PENDING_APPROVAL -> CONFIRMED. Those three transitions are
+owned exclusively by `approval.py`. This split is what
+tests/test_architecture_rule.py checks automatically.
 """
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 from sqlalchemy.orm import Session
 
-from .db import ReservationORM
-from .db import ResourceORM
-
+from .db import ReservationORM, ResourceORM
 from .models import Reservation, ReservationState
 from .notification import NotificationService
 
@@ -24,6 +35,22 @@ OPERATING_HOURS_END = time(23, 0)
 # Reservations must be booked in fixed increments, and can't run forever.
 RESERVATION_STEP_MINUTES = 30
 MAX_DURATION_MINUTES = 240  # 4 hours -- a reasonable cap for one parking slot
+
+# How long a PENDING_APPROVAL reservation waits before it is eligible to
+# expire. Owned here because it's created at the same moment as the
+# PENDING_APPROVAL entry transition; approval.py is what actually acts on it.
+APPROVAL_WINDOW = timedelta(hours=24)
+
+# States from which a reservation may still be cancelled by its owner.
+# REJECTED and EXPIRED are terminal outcomes of the approval workflow and
+# are intentionally excluded (fixes evidence-and-evolution.md "Mismatches
+# found" #2: cancel used to only reject an already-CANCELLED reservation,
+# so a REJECTED/EXPIRED one could be silently re-labelled CANCELLED).
+CANCELLABLE_STATES = {
+    ReservationState.DRAFT,
+    ReservationState.PENDING_APPROVAL,
+    ReservationState.CONFIRMED,
+}
 
 
 class ReservationError(Exception):
@@ -83,7 +110,11 @@ def _has_overlapping_confirmed(
 def check_availability(
     session: Session, resource_id: str, start_time: datetime, end_time: datetime
 ) -> bool:
-    """True if a CONFIRMED reservation could legally be made for this slot."""
+    """True if a CONFIRMED reservation could legally be made for this slot.
+
+    Only CONFIRMED reservations block a slot -- PENDING_APPROVAL does not
+    (BR-12 / approval_workflow_impact_analysis.md: explicitly non-blocking,
+    so two users may wait on the same slot and the first approval wins)."""
     if not _within_operating_hours(start_time, end_time):
         return False
     return not _has_overlapping_confirmed(session, resource_id, start_time, end_time)
@@ -145,9 +176,12 @@ def confirm(
         raise ReservationError("resource already has an overlapping confirmed reservation")
 
     resource = session.get(ResourceORM, reservation.resource_id)
-    if resource and getattr(resource, 'requires_approval', False):
+    if resource is not None and resource.requires_approval:
+        # The single entry transition into the approval workflow. The
+        # *outcome* (CONFIRMED / REJECTED / EXPIRED) is decided exclusively
+        # by approval.py -- see the module docstring above and ADR-01.
         reservation.state = ReservationState.PENDING_APPROVAL
-        reservation.approval_expires_at = datetime.now() + timedelta(hours=24)
+        reservation.approval_expires_at = datetime.now() + APPROVAL_WINDOW
         session.commit()
         return reservation
 
@@ -165,8 +199,10 @@ def cancel(
     reservation = session.get(ReservationORM, reservation_id)
     if reservation is None:
         raise ReservationError(f"no reservation with id {reservation_id}")
-    if reservation.state == ReservationState.CANCELLED:
-        raise ReservationError("reservation is already cancelled")
+    if reservation.state not in CANCELLABLE_STATES:
+        raise ReservationError(
+            f"cannot cancel a reservation in state {reservation.state}"
+        )
 
     # Ownership check: an account-tied reservation can only be cancelled by
     # that same account; an anonymous reservation can only be cancelled
@@ -174,15 +210,12 @@ def cancel(
     # to be enough to cancel anyone's booking.
     if reservation.account_id is not None:
         if requesting_account_id != reservation.account_id:
-            raise NotAuthorizedError(
-                "you are not authorized to cancel this reservation"
-            )
+            raise NotAuthorizedError("you are not authorized to cancel this reservation")
     elif requesting_account_id is not None:
-        raise NotAuthorizedError(
-            "you are not authorized to cancel this reservation"
-        )
+        raise NotAuthorizedError("you are not authorized to cancel this reservation")
 
     reservation.state = ReservationState.CANCELLED
+    reservation.approval_expires_at = None
     session.commit()
     return reservation
 
@@ -221,73 +254,3 @@ def list_reservations_for_account(session: Session, account_id: str) -> list[Res
         .order_by(ReservationORM.start_time.desc())
         .all()
     )
-
-def approve(
-    session: Session,
-    reservation_id: str,
-    admin_account_id: str,
-    notifier: NotificationService
-) -> ReservationORM:
-    """Admin schválí rezervaci, která čeká na potvrzení."""
-    reservation = session.get(ReservationORM, reservation_id)
-    if reservation is None:
-        raise ReservationError(f"no reservation with id {reservation_id}")
-    
-    if reservation.state != ReservationState.PENDING_APPROVAL:
-        raise ReservationError("only reservations in PENDING_APPROVAL state can be approved")
-    
-    # Musíme znovu zkontrolovat překryv, protože během čekání mohl místo obsadit někdo jiný 
-    # (např. admin schválil jinou rezervaci na stejný čas)
-    if _has_overlapping_confirmed(
-        session,
-        reservation.resource_id,
-        reservation.start_time,
-        reservation.end_time,
-        exclude_reservation_id=reservation.id,
-    ):
-        raise ReservationError("resource already has an overlapping confirmed reservation, cannot approve")
-
-    reservation.state = ReservationState.CONFIRMED
-    reservation.approval_expires_at = None # Už neexpiruje
-    session.commit()
-    notifier.send_reservation_confirmed(reservation.user_id, reservation.id)
-    return reservation
-
-def reject(
-    session: Session,
-    reservation_id: str,
-    admin_account_id: str,
-    notifier: NotificationService
-) -> ReservationORM:
-    """Admin zamítne rezervaci, která čeká na potvrzení."""
-    reservation = session.get(ReservationORM, reservation_id)
-    if reservation is None:
-        raise ReservationError(f"no reservation with id {reservation_id}")
-    
-    if reservation.state != ReservationState.PENDING_APPROVAL:
-        raise ReservationError("only reservations in PENDING_APPROVAL state can be rejected")
-        
-    reservation.state = ReservationState.REJECTED
-    reservation.approval_expires_at = None
-    session.commit()
-    # Volitelně: notifier.send_reservation_rejected(reservation.user_id, reservation.id)
-    return reservation
-
-def expire_pending(session: Session) -> int:
-    """
-    Vyhledá všechny rezervace, kterým vypršel čas na schválení, a zruší je.
-    Tuto funkci může volat např. cron job nebo background worker.
-    """
-    expired_reservations = session.query(ReservationORM).filter(
-        ReservationORM.state == ReservationState.PENDING_APPROVAL,
-        ReservationORM.approval_expires_at < datetime.now()
-    ).all()
-
-    for res in expired_reservations:
-        res.state = ReservationState.EXPIRED
-        res.approval_expires_at = None
-
-    if expired_reservations:
-        session.commit()
-        
-    return len(expired_reservations)

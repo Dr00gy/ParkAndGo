@@ -2,6 +2,13 @@
 
 These are plain, framework-agnostic representations of the core concepts
 from the Project Frame: Resource, User, Reservation (+ its states).
+
+NOTE (C03 fix): this file previously contained
+`requires_approval = Column(Boolean, default=False)` on the plain
+`Resource` dataclass below. `Column`/`Boolean` are SQLAlchemy ORM
+constructs and were never imported here -- that line raised a NameError
+the instant this module was imported, which is why the application could
+not start. Fixed to a plain dataclass field.
 """
 from __future__ import annotations
 
@@ -25,7 +32,7 @@ class Resource:
     """A reservable parking spot."""
     id: str
     label: str  # e.g. "Lot A - Spot 12"
-    requires_approval = Column(Boolean, default=False)
+    requires_approval: bool = False
 
 
 @dataclass

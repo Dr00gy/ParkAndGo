@@ -20,18 +20,26 @@ Wrote `tests/test_persistence_spike.py`:
 4. Read the reservation back by ID and asserted every field
    (resource, user, start/end time, state) matched what was written.
 
-Ran it together with the rest of the test suite:
+Ran it together with the rest of the test suite (12 tests total as of
+C03, after the approval-workflow and architecture-conformance tests were
+added — see the C03 section below):
 
 ```
 $ python -m pytest -v
+tests/test_architecture_rule.py::test_services_module_never_sets_rejected_or_expired PASSED
+tests/test_architecture_rule.py::test_services_module_does_not_transition_pending_approval_to_confirmed PASSED
+tests/test_architecture_rule.py::test_approval_module_owns_the_three_outcome_transitions PASSED
 tests/test_persistence_spike.py::test_reservation_survives_a_fresh_engine_and_session PASSED
 tests/test_reservation_service.py::test_overlapping_confirmed_reservations_are_rejected PASSED
 tests/test_reservation_service.py::test_non_overlapping_confirmed_reservations_are_allowed PASSED
 tests/test_reservation_service.py::test_reservation_outside_operating_hours_is_rejected PASSED
+tests/test_reservation_service.py::test_reservation_in_the_past_is_rejected PASSED
+tests/test_reservation_service.py::test_reservation_duration_must_be_a_multiple_of_30_minutes PASSED
 tests/test_reservation_service.py::test_cancel_frees_up_the_slot_for_a_new_confirmation PASSED
 tests/test_reservation_service.py::test_prolong_into_another_confirmed_reservation_is_rejected PASSED
+tests/test_reservation_service.py::test_list_reservations_for_account PASSED
 
-6 passed in 0.27s
+12 passed in 0.46s
 ```
 
 We also manually exercised the HTTP layer end-to-end (`POST /reservations`
@@ -48,23 +56,34 @@ not an artifact of shared in-process state.
 
 ## Decision / what changes because of the result
 Persistence is confirmed to work at the level we need for CP1. Two
-follow-ups were surfaced by writing this spike (not fixed now, but
-recorded so they aren't lost):
+follow-ups were surfaced by writing this spike (not fixed then, directly
+relevant to the C03 decision below):
 1. The overlap check (`_has_overlapping_confirmed`) is a plain
    read-then-write within one session — fine for a single-process demo,
    but not safe under concurrent writers. This directly informs the
-   selected future pressure (Q — scale) in `intent-and-change.md`.
+   selected future pressure (Q — scale) in `intent-and-change.md`, and is
+   the central driver behind ADR-01 in `c03-architecture.md`.
 2. We're using a single shared SQLite file (`parking.db`) for the running
    API. SQLite handles concurrent writers poorly; if we scale past a
    single-process demo this is one of the first things to swap (e.g. for
    Postgres), consistent with the "Persistence" rationale in
    `architecture-and-decisions.md`.
 
+---
+
 # C02: Change Impact and Evidence
 
 **Change C02:** some Resources require approval by an authorized person (admin) before a Reservation can become CONFIRMED. Approval may be delayed, rejected, or may expire. This applies to both logged-in users and anonymous users.
 
-> **Note on verification:** the code was only read, not run. As delivered, the application would not start (see "Mismatches found"). The verification examples are therefore listed as scenarios, and the actual results must be filled in. It is assumed that `models.py` is unchanged (it was not included in the second upload).
+> **Update (C03):** the note that used to be here said "the code was only
+> read, not run... the application would not start." That is no longer
+> true. Three concrete bugs that prevented the application from starting
+> were found and fixed during C03 (missing `Boolean` import in `db.py`,
+> a broken `Resource` dataclass field in `models.py`, and mismatched
+> seed-data tuples in `db.py` — full list in `c03-architecture.md`,
+> "AS-IS findings"). All verification examples below were then **actually
+> executed** against the running application. Results are filled in, not
+> placeholders.
 
 ---
 
@@ -77,9 +96,9 @@ Some Resources require approval by an authorized person (admin) before a Reserva
 - **Reservation confirmation (DRAFT → ?).** Confirmation no longer always leads to CONFIRMED. For a resource with the `requires_approval` flag it leads to the new PENDING_APPROVAL state.
 - **Reservation lifecycle.** The states PENDING_APPROVAL, REJECTED and EXPIRED are added.
 - **Roles and permissions.** A new admin role (`AccountORM.is_admin`) and authorization on the approve / reject / expiration operations.
-- **Resource.** Gains an "requires approval" property. A VIP spot is added to the seed data.
+- **Resource.** Gains a `requires_approval` property. A VIP spot (`spot-9`) is seeded with it set to `True`.
 - **Time behavior.** An approval deadline (24 h, `approval_expires_at`) and an expiration mechanism are introduced.
-- **Notifications.** The confirmation is sent only after approval. Nothing is sent for pending, rejection or expiry (the interface currently only supports `send_reservation_confirmed`).
+- **Notifications.** The confirmation is sent only after approval. Nothing is sent for pending, rejection or expiry (the interface currently only supports `send_reservation_confirmed`) — recorded as an open architectural driver, not fixed in C03.
 - **Non-overlap rule.** Its meaning is refined: only CONFIRMED reservations block a slot, PENDING_APPROVAL does not hold it. The overlap is therefore re-checked on approval.
 
 ### Unaffected requirements / parts + why
@@ -93,32 +112,34 @@ Some Resources require approval by an authorized person (admin) before a Reserva
 | Ownership check on `cancel` | Rule unchanged (an account cancels its own, an anonymous user cancels anonymous ones). Admin cannot yet cancel other people's reservations. |
 | `prolong` | Unchanged, but it raises an open question (see unknowns). |
 | Notification boundary (interface) | Interface is the same, no methods were added. |
-| `/config`, `/resources`, `/reservations/mine` | Contract unchanged. The `requires_approval` flag is not yet exposed through the API. |
+| `/config`, `/resources`, `/reservations/mine` | Contract unchanged; `/resources` now additionally exposes `requires_approval` (C03 fix, additive). |
 
 ### New actor / operations, if any
-- **Admin** (authorized person): a specialization of the logged-in user with `is_admin = True`.
-- **Time / scheduler:** an actor for expiration. In the code it is currently replaced by a manual admin endpoint or cron.
+- **Admin** (authorized person): a specialization of the logged-in user with `is_admin = True`. A demo admin account is now seeded on startup (`admin@parkandgo.test` / `admin12345` — see `c03-architecture.md`, this closes the C02 mismatch "there is no way to create an admin").
+- **Time / scheduler:** an actor for expiration. Still a manually-triggered admin endpoint as of C03 (see ADR-01 in `c03-architecture.md` — a real scheduler is an accepted, deliberate gap, not an oversight).
 - **New operations:**
   - Approve: `POST /reservations/{id}/approve`
   - Reject: `POST /reservations/{id}/reject`
   - Expire pending: `POST /admin/reservations/trigger-expiration` → `expire_pending`
+  - (C03 addition) List pending: `GET /reservations/pending` — admin view of everything awaiting a decision
 - **Changed operation:** Confirm reservation now has two branches depending on the resource.
 
 ### Changed rules / meaning of states
 | State | Meaning | Entered by | Left by |
 |---|---|---|---|
 | DRAFT | Draft, does not block the slot | create | confirm, cancel |
-| **PENDING_APPROVAL** (new) | Waiting for admin, does not block the slot, 24 h deadline running | confirm (resource with `requires_approval`) | approve, reject, expire, cancel |
+| **PENDING_APPROVAL** | Waiting for admin, does not block the slot, 24 h deadline running | confirm (resource with `requires_approval`) | approve, reject, expire, cancel |
 | CONFIRMED | Confirmed, blocks the slot | confirm (regular resource), approve | prolong, cancel |
-| **REJECTED** (new) | Admin rejected, final | reject | – |
-| **EXPIRED** (new) | Approval deadline passed, final | expire_pending | – |
-| CANCELLED | Cancelled by the user, final | cancel | – |
+| **REJECTED** | Admin rejected, final | reject | – |
+| **EXPIRED** | Approval deadline passed, final | expire_pending, or `approve()` itself when called past the deadline (C03 fix) | – |
+| CANCELLED | Cancelled by the user, final | cancel (only from DRAFT/PENDING_APPROVAL/CONFIRMED as of C03 — see mismatches) | – |
 
 New rules:
 - A resource with `requires_approval` cannot be confirmed directly.
-- `approve` may be performed only by an admin, only from PENDING_APPROVAL, and after re-checking overlap.
+- `approve` may be performed only by an admin, only from PENDING_APPROVAL, after re-checking overlap, **and only before the approval deadline** (C03 fix — see mismatch #1).
 - `reject` may be performed only by an admin, and only from PENDING_APPROVAL.
 - `expire_pending` marks PENDING_APPROVAL reservations whose `approval_expires_at` has passed as EXPIRED.
+- `cancel` is only allowed from DRAFT, PENDING_APPROVAL or CONFIRMED (C03 fix — see mismatch #2).
 
 ### Use case diagram change
 In uml-ult.png, uml is an old file before fixing mismatches in C02, but kept for documentation purposes in regards to the process.
@@ -126,72 +147,120 @@ In uml-ult.png, uml is an old file before fixing mismatches in C02, but kept for
 Admin is also a logged-in user. Only the use cases marked NEW and the branching in "Confirm reservation" changed.
 
 ### State diagram change
-In stateX.png files
+In stateX.png files.
 
-### New verification examples
-| # | Scenario | Expected result |
+### New verification examples — now actually executed (C03)
+| # | Scenario | Expected result | Actual result (executed via FastAPI TestClient against the real app) |
+|---|---|---|---|
+| 1 | Confirm a reservation on a regular spot | CONFIRMED, notification sent | **PASS** — `200 CONFIRMED` |
+| 2 | Confirm a reservation on the VIP spot | PENDING_APPROVAL, `approval_expires_at` ≈ now + 24 h, no notification sent | **PASS** — `200 PENDING_APPROVAL`, deadline set |
+| 3 | Admin approves a pending reservation | CONFIRMED, `approval_expires_at = None`, notification sent | **PASS** — `200 CONFIRMED`, deadline cleared |
+| 4 | Admin rejects a pending reservation | REJECTED, slot remains free | **PASS** — `200 REJECTED`, availability `True` afterwards |
+| 5 | Non-admin / anonymous user calls approve or reject | 403 | **PASS** — `403` |
+| 6 | Approve from a state other than PENDING_APPROVAL | 400 | **PASS** — `400` |
+| 7 | Two pending reservations on the same slot, the first is approved, then the second | Second: 400 (overlap), stays PENDING_APPROVAL | **PASS** — first `200 CONFIRMED`, second `400 overlapping confirmed reservation` |
+| 8 | Pending reservation with an expired deadline, trigger-expiration is called | EXPIRED, count returned in the response | **PASS** — `200 {"expired_count": 1}` |
+| 9 | Pending reservation with an expired deadline, expiration has not run yet, admin calls approve | Was expected to incorrectly succeed (mismatch #1) | **FIXED in C03** — now correctly `400 "approval window has expired; reservation marked EXPIRED"`, and the row is flipped to EXPIRED as a side effect |
+| 10 | Anonymous pending reservation, admin approves | CONFIRMED, notification goes to the plate number (`user_id`) | **PASS** — `200 CONFIRMED`, `user_id` = plate |
+| 11 | Pending on the VIP spot, meanwhile an overlapping one is confirmed | Approve fails because overlap is re-checked | **PASS** — covered by #7 above |
+
+### Mismatches found and how they were resolved
+| # | Mismatch | Status |
 |---|---|---|
-| 1 | Confirm a reservation on a regular spot | CONFIRMED, notification sent (unchanged from C01) |
-| 2 | Confirm a reservation on the VIP spot | PENDING_APPROVAL, `approval_expires_at` ≈ now + 24 h, no notification sent |
-| 3 | Admin approves a pending reservation | CONFIRMED, `approval_expires_at = None`, notification sent |
-| 4 | Admin rejects a pending reservation | REJECTED, slot remains free |
-| 5 | Non-admin / anonymous user calls approve or reject | 403 |
-| 6 | Approve from a state other than PENDING_APPROVAL | 400 |
-| 7 | Two pending reservations on the same slot, the first is approved, then the second | Second: 400 (overlap), stays PENDING_APPROVAL |
-| 8 | Pending reservation with an expired deadline, trigger-expiration is called | EXPIRED, count returned in the response |
-| 9 | Pending reservation with an expired deadline, expiration has not run yet, admin calls approve | 400 expected, but the code approves it (mismatch no. 6) |
-| 10 | Anonymous pending reservation, admin approves | CONFIRMED, notification goes to the plate number (`user_id`) |
-| 11 | Pending on the VIP spot, meanwhile an overlapping one is confirmed | Approve fails because overlap is re-checked |
+| 1 | `approve` does not check `approval_expires_at`, so an expired but not yet expired-marked reservation can be approved | **Resolved in C03.** `approval.approve()` now checks the deadline, marks EXPIRED and rejects if it has passed. Verified (scenario #9). |
+| 2 | `cancel` allows cancelling REJECTED and EXPIRED reservations (it only checked for CANCELLED) | **Resolved in C03.** `cancel()` now only accepts `{DRAFT, PENDING_APPROVAL, CONFIRMED}`. Verified: cancelling a REJECTED reservation now returns `400`. |
+| 3 | There is no way to create an admin (`is_admin` is never set) and `AccountResponse` does not expose it | **Resolved in C03.** A demo admin is seeded on startup; `AccountResponse.is_admin` is exposed. |
+| 4 | The deadline is 24 h regardless of the reservation start, so approval can arrive after the start | **Not resolved — remaining, explicit gap.** Recorded in `c03-architecture.md`, AS-IS→TO-BE delta, row "Deadline capped at reservation start", marked `VERIFY / open` rather than silently dropped. |
 
-### Architectural drivers for C03
+### Summary of the change impact
+The change adds a branch in confirmation, three new states, an admin role and time-driven expiration. The rules for operating hours, duration, non-overlap and authentication remain. The biggest impact is on the state diagram, authorization, and the ties to time, notifications and concurrency — which is exactly what C03's architecture work (below) addresses.
 
-1. **Time and expiration.** Expiration is currently lazy and triggered manually. An autonomous time component (scheduler) is needed, along with a lazy vs. eager decision. Races between approve and expire follow from this.
-2. **Concurrency.** The "check overlap, then write" sequence is not atomic. Concurrent approval of two overlapping pending reservations can confirm both. A transactional or DB-level guarantee is needed.
-3. **Asynchronous notifications.** Approval arrives hours later and outside the original request. Notifications must be reliable (retry, outbox) and the interface must be extended for pending / rejected / expired.
-4. **Authorization.** Currently a global `is_admin`. The assignment speaks of an "authorized person" for a resource, so per-resource permissions (RBAC) may be needed.
-5. **Anonymous user with no return channel.** An anonymous user has no contact, only a plate number, and there is no endpoint to look up a reservation's status.
-6. **Audit.** `admin_account_id` is passed in but never stored.
-7. **Schema evolution.** `create_all` does not add columns to an existing DB, so migrations are needed.
-8. **Model consistency.** `models.py` has drifted from the ORM (states, fields).
-9. **Time zone.** `datetime.now()` and naive datetimes will diverge once a scheduler and multiple instances are involved.
+### Remaining assumptions / unknowns
+- What "cancel" means for an admin is still undecided: implemented as rejecting a pending reservation, but an admin cannot yet cancel other people's already-confirmed reservations.
+- Pending reservations still do not block the slot (by design — BR-12), so two users can wait on the same slot; only one can win at approval time (demonstrated in scenario #7/#11).
+- `prolong` on a resource requiring approval bypasses approval, since extending a confirmed reservation does not require a new approval. Unchanged in C03.
+- Behavior when notification delivery fails after a commit is unchanged from C01 (the interface can simulate timeout/failure, but nothing currently retries).
+- Mismatch #4 (deadline not capped to reservation start) remains open — see above.
+
+### Architectural drivers carried over to C03
+Points 1–5 from "B. Architectural drivers" in `c03-architecture.md`: time/expiration & scheduler, concurrency of the approval re-check, authorization of a new actor, the anonymous-user return-channel gap, and the notification interface needing more outcomes. ADR-01 addresses #1–#3 directly; #4 and #5 are recorded as still open.
+
+### Application commit / tag
+Fill in after committing the C03 fixes (`src/db.py`, `src/models.py`, `src/services.py`, `src/approval.py`, `src/main.py`, `tests/test_architecture_rule.py`) to your team repository.
 
 ---
 
-## Evidence C02: specification → running application
+# C03 — Architecture Evidence
 
-### Accepted baseline
-State of C01: reservations with DRAFT → CONFIRMED → CANCELLED, operating hours, 30-min step, max 4 h, non-overlap of CONFIRMED, accounts with session tokens, ownership check on `cancel`, notification stub.
+Full detail (drivers, domain model, responsibilities, decision question,
+alternatives, scenario walkthrough, ADR-01, all views, cross-view check,
+AS-IS→TO-BE delta) is in **`c03-architecture.md`** — kept as its own
+document because of its length. Summary for this evidence log:
 
-### Basic operations demonstrated
-Creating a draft, confirming (both branches), approving, rejecting, expiring, cancelling, availability.
+**Baseline:** v0.2 (this document, C02 section above)
 
-### Verification examples actually performed
-Scenarios 1–11 above.
+**Part A:** application did not start; three bugs found and fixed (bad
+import, broken dataclass field, mismatched seed-data tuples) — see
+"AS-IS findings" in `c03-architecture.md`.
 
-### Mismatches found and how they were resolved
-| # | Mismatch | Proposed resolution |
-|---|---|---|
-| 1 | `approve` does not check `approval_expires_at`, so an expired but not yet expired-marked reservation can be approved | In `approve`, reject after the deadline, or mark it EXPIRED first |
-| 2 | `cancel` allows cancelling REJECTED and EXPIRED reservations (it only checks for CANCELLED) | Allow cancel only from DRAFT, PENDING_APPROVAL, CONFIRMED |
-| 3 | There is no way to create an admin (`is_admin` is never set) and `AccountResponse` does not expose it | Seed an admin or provide a CLI script, add `is_admin` to the response |
-| 4 | The deadline is 24 h regardless of the reservation start, so approval can arrive after the start | Cap the deadline at `min(24 h, start_time)` |
+**Drivers:** delayed/time-driven approval decision; concurrency of the
+overlap re-check at approval time; a new admin actor; anonymous users'
+missing return channel; notification interface needing more outcomes.
 
-The resolutions are not yet implemented; they are proposals.
+**Decision question:** where should the Approval Workflow (the
+PENDING_APPROVAL outcome decision + expiration) be owned, and how is
+BR-02 kept true when that decision happens later than the original
+request?
 
-### Summary of the change impact
-The change adds a branch in confirmation, three new states, an admin role and time-driven expiration. The rules for operating hours, duration, non-overlap and authentication remain. The biggest impact is on the state diagram, authorization, and the ties to time, notifications and concurrency (the basis for C03).
+**Alternatives:** (A) same deployable, separate module; (B) separate
+worker/service process.
 
-### Remaining assumptions / unknowns
-- What "cancel" means in the assignment. Implemented as rejecting a pending reservation, but an admin cannot cancel other people's already-confirmed reservations.
-- Do pending reservations block the slot? Implemented as no, so two users can wait on the same slot.
-- `prolong` on a resource requiring approval bypasses approval, since extending a confirmed reservation does not require a new approval.
-- Behavior when notification fails after commit (unchanged from C01).
+**Scenario walkthrough:** two overlapping PENDING_APPROVAL reservations
+on the VIP spot, first approved then second — run against the real
+implementation of Alternative A: first → `200 CONFIRMED`, second →
+`400` (overlap re-check holds).
 
-### Architectural drivers carried over to C03
-Points 1–9 from "Change Impact": expiration / scheduler, concurrency, asynchronous reliable notifications, authorization, anonymous user with no return channel, audit, schema migration, model consistency and time zones.
+**ADR:** ADR-01 — Alternative A chosen (module boundary inside the same
+process); accepted negative consequences: expiration stays lazy, the
+underlying race window is narrowed but not eliminated. Full text in
+`c03-architecture.md`.
 
-### Application commit / tag
-initial commit:
-593435b925f999066b9c05e94ce76dc68fbf0d48
-merge:
-dfed555a992608506e109724e1223c0f4e4a36e0
+**Views produced:** domain class model, context diagram, static
+architecture (component) diagram, state-ownership table, runtime/
+deployment mapping, design sequence diagram, design class diagram — all
+in `c03-architecture.md`.
+
+**Cross-view issues found/resolved:** the architecture-conformance test
+initially flagged `services.py`'s own explanatory docstring as a
+violation (it mentions REJECTED/EXPIRED in prose); fixed by checking the
+specific enum reference (`ReservationState.REJECTED`) rather than the
+bare word, so the check tests what the code does, not what its comments
+say.
+
+**AS-IS → TO-BE delta:** 6 `CHANGE` rows (all implemented), 3 `KEEP`
+rows (unaffected), 1 explicit open `VERIFY` row (the uncapped deadline,
+mismatch #4) — full table in `c03-architecture.md`.
+
+**Implementation changes:** `src/db.py`, `src/models.py`, `src/services.py`
+fixed; `src/approval.py` added (new module, owns the three approval
+outcome transitions); `src/main.py` wired to it; `tests/test_architecture_rule.py`
+added.
+
+**Behaviour verification:** all 11 C02 approval scenarios re-run against
+the real HTTP API — all PASS, including the two that were previously
+broken (mismatch #1, #2) and are now fixed and verified. All 12 automated
+tests pass (`pytest -v`).
+
+**Architecture conformance rule + result:** "Only `src/approval.py` may
+decide a pending approval's outcome" — checked by
+`tests/test_architecture_rule.py` — **PASS** (3/3 conformance tests).
+
+**Remaining uncertainty / risk:** the overlap-check race under true
+concurrent load (the Q/Scale future pressure from `intent-and-change.md`)
+is unchanged by this ADR — narrowing the module boundary made the gap
+easier to find and reason about, not harder to hit. Expiration remains
+reactive (manually triggered), not proactive. The notification interface
+still only supports a "confirmed" outcome. The deadline is not capped to
+the reservation's start time (mismatch #4).
+
+**Commit/tag:** fill in after committing.

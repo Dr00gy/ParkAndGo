@@ -3,8 +3,8 @@
 This is the CP1 walking skeleton entry point:
 POST /reservations -> validate -> persist -> return reservation ID
 
-Also serves a small static single-page UI (static/index.html) at "/" so the
-system can be tried out without needing the /docs Swagger page.
+Also serves a small static single-page UI (static/index.html) at "/ui" so
+the system can be tried out without needing the /docs Swagger page.
 """
 from __future__ import annotations
 
@@ -17,8 +17,16 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import accounts as accounts_service
+from . import approval
 from . import services
-from .db import ResourceORM, get_engine, get_session_factory, init_db, seed_resources
+from .db import (
+    ResourceORM,
+    get_engine,
+    get_session_factory,
+    init_db,
+    seed_admin_account,
+    seed_resources,
+)
 from .notification import StubNotificationService
 
 app = FastAPI(title="Campus Parking Reservation System")
@@ -27,6 +35,7 @@ engine = get_engine()
 init_db(engine)
 SessionLocal = get_session_factory(engine)
 seed_resources(SessionLocal)
+seed_admin_account(SessionLocal)
 notifier = StubNotificationService()
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
@@ -55,11 +64,13 @@ class ReservationResponse(BaseModel):
     start_time: datetime
     end_time: datetime
     state: str
+    approval_expires_at: datetime | None = None
 
 
 class ResourceResponse(BaseModel):
     id: str
     label: str
+    requires_approval: bool
 
 
 class ResourceAvailability(BaseModel):
@@ -89,6 +100,7 @@ class AccountResponse(BaseModel):
     email: str
     phone: str | None = None
     date_of_birth: date_type | None = None
+    is_admin: bool = False
 
 
 class SessionResponse(BaseModel):
@@ -113,6 +125,7 @@ def _to_response(r) -> ReservationResponse:
         start_time=r.start_time,
         end_time=r.end_time,
         state=r.state.value if hasattr(r.state, "value") else r.state,
+        approval_expires_at=r.approval_expires_at,
     )
 
 
@@ -124,6 +137,7 @@ def _account_to_response(a) -> AccountResponse:
         email=a.email,
         phone=a.phone,
         date_of_birth=a.date_of_birth,
+        is_admin=bool(a.is_admin),
     )
 
 
@@ -132,6 +146,13 @@ def _account_from_authorization(session, authorization: str | None):
         return None
     token = authorization[len("Bearer ") :].strip()
     return accounts_service.get_account_for_token(session, token)
+
+
+def _require_admin(session, authorization: str | None):
+    account = _account_from_authorization(session, authorization)
+    if not account or not account.is_admin:
+        raise HTTPException(status_code=403, detail="admin privileges required")
+    return account
 
 
 @app.post("/reservations", response_model=ReservationResponse)
@@ -200,16 +221,9 @@ def prolong_reservation(reservation_id: str, req: ProlongRequest):
 def approve_reservation(reservation_id: str, authorization: str | None = Header(None)):
     session = SessionLocal()
     try:
-        account = _account_from_authorization(session, authorization)
-        # Ověření, že uživatel je přihlášen a má oprávnění administrátora
-        if not account or not getattr(account, "is_admin", False):
-            raise HTTPException(status_code=403, detail="Admin privileges required")
-            
-        reservation = services.approve(
-            session, 
-            reservation_id, 
-            admin_account_id=account.id, 
-            notifier=notifier
+        account = _require_admin(session, authorization)
+        reservation = approval.approve(
+            session, reservation_id, admin_account_id=account.id, notifier=notifier
         )
         return _to_response(reservation)
     except services.ReservationError as e:
@@ -222,15 +236,9 @@ def approve_reservation(reservation_id: str, authorization: str | None = Header(
 def reject_reservation(reservation_id: str, authorization: str | None = Header(None)):
     session = SessionLocal()
     try:
-        account = _account_from_authorization(session, authorization)
-        if not account or not getattr(account, "is_admin", False):
-            raise HTTPException(status_code=403, detail="Admin privileges required")
-            
-        reservation = services.reject(
-            session, 
-            reservation_id, 
-            admin_account_id=account.id, 
-            notifier=notifier
+        account = _require_admin(session, authorization)
+        reservation = approval.reject(
+            session, reservation_id, admin_account_id=account.id, notifier=notifier
         )
         return _to_response(reservation)
     except services.ReservationError as e:
@@ -241,20 +249,17 @@ def reject_reservation(reservation_id: str, authorization: str | None = Header(N
 
 @app.post("/admin/reservations/trigger-expiration")
 def trigger_expiration(authorization: str | None = Header(None)):
-    """
-    Pomocný endpoint pro ruční spuštění kontroly expirovaných rezervací.
-    Lze ho volat i periodicky cronem.
-    """
+    """Manually-triggered sweep for PENDING_APPROVAL reservations whose
+    deadline has passed. A real scheduler is an open architectural driver
+    (see docs/evidence-and-evolution.md), not implemented in C03."""
     session = SessionLocal()
     try:
-        account = _account_from_authorization(session, authorization)
-        if not account or not getattr(account, "is_admin", False):
-            raise HTTPException(status_code=403, detail="Admin privileges required")
-            
-        expired_count = services.expire_pending(session)
+        _require_admin(session, authorization)
+        expired_count = approval.expire_pending(session)
         return {"ok": True, "expired_count": expired_count}
     finally:
         session.close()
+
 
 @app.get("/availability")
 def availability(resource_id: str, start_time: datetime, end_time: datetime):
@@ -283,7 +288,7 @@ def list_resources():
     session = SessionLocal()
     try:
         return [
-            ResourceResponse(id=r.id, label=r.label)
+            ResourceResponse(id=r.id, label=r.label, requires_approval=bool(r.requires_approval))
             for r in session.query(ResourceORM).order_by(ResourceORM.id).all()
         ]
     finally:
@@ -318,6 +323,26 @@ def my_reservations(authorization: str | None = Header(None)):
         if account is None:
             raise HTTPException(status_code=401, detail="login required")
         rows = services.list_reservations_for_account(session, account.id)
+        return [_to_response(r) for r in rows]
+    finally:
+        session.close()
+
+
+@app.get("/reservations/pending", response_model=list[ReservationResponse])
+def pending_reservations(authorization: str | None = Header(None)):
+    """Admin view: everything currently awaiting a decision."""
+    session = SessionLocal()
+    try:
+        _require_admin(session, authorization)
+        from .db import ReservationORM
+        from .models import ReservationState
+
+        rows = (
+            session.query(ReservationORM)
+            .filter(ReservationORM.state == ReservationState.PENDING_APPROVAL)
+            .order_by(ReservationORM.start_time)
+            .all()
+        )
         return [_to_response(r) for r in rows]
     finally:
         session.close()
