@@ -9,6 +9,7 @@
     --taken: #c0392b;
     --selected: #2563eb;
     --neutral: #9aa0a6;
+    --pending: #b8860b;
     --bg: #f5f6f8;
     --card: #ffffff;
   }
@@ -31,6 +32,15 @@
   .subtitle { color: #57606a; margin-top: 0; margin-bottom: 20px; }
   .session-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
   .session-bar .greeting { font-size: 0.9rem; color: #1f2328; margin-right: 4px; }
+  .admin-badge {
+    font-size: 0.7rem;
+    background: var(--pending);
+    color: white;
+    border-radius: 10px;
+    padding: 2px 8px;
+    margin-right: 4px;
+    vertical-align: 1px;
+  }
   .card {
     background: var(--card);
     border-radius: 10px;
@@ -51,7 +61,7 @@
     background: white;
   }
   input:disabled { background: #f0f2f5; color: #57606a; }
-  .legend { display: flex; gap: 18px; font-size: 0.85rem; margin: 14px 0 4px 0; color: #57606a; }
+  .legend { display: flex; gap: 18px; font-size: 0.85rem; margin: 14px 0 4px 0; color: #57606a; flex-wrap: wrap; }
   .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
   .grid {
     display: grid;
@@ -79,7 +89,7 @@
   .hint { font-size: 0.85rem; color: #57606a; margin-top: 10px; }
   .details { margin-top: 18px; display: none; }
   .details.show { display: block; }
-  .actions { display: flex; gap: 10px; margin-top: 14px; }
+  .actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
   button.primary {
     background: var(--selected);
     color: white;
@@ -98,6 +108,7 @@
     font-size: 0.9rem;
     cursor: pointer;
   }
+  button.primary:disabled, button.secondary:disabled, button.danger:disabled { opacity: 0.6; cursor: not-allowed; }
   button.primary:disabled { background: #a9b8e8; cursor: not-allowed; }
   button.link {
     background: none;
@@ -108,7 +119,26 @@
     padding: 0;
     text-decoration: underline;
   }
+  button.approve {
+    background: var(--free);
+    color: white;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  button.reject {
+    background: var(--taken);
+    color: white;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
   .error { color: var(--taken); font-size: 0.9rem; margin-top: 8px; min-height: 1.1em; }
+  .success { color: var(--free); font-size: 0.9rem; margin-top: 8px; min-height: 1.1em; }
 
   .corner {
     position: fixed;
@@ -174,15 +204,19 @@
 
   .res-list { text-align: left; margin-top: 10px; }
   .res-row { border-bottom: 1px solid #eef0f2; padding: 10px 0; }
-  .res-summary { display: flex; justify-content: space-between; align-items: center; gap: 10px; cursor: pointer; }
+  .res-summary { display: flex; justify-content: space-between; align-items: center; gap: 10px; cursor: pointer; flex-wrap: wrap; }
   .res-summary .label { font-size: 0.9rem; }
-  .res-state { font-size: 0.75rem; padding: 2px 8px; border-radius: 10px; color: white; margin-left: 6px; }
+  .res-state { font-size: 0.75rem; padding: 2px 8px; border-radius: 10px; color: white; margin-left: 6px; white-space: nowrap; }
   .res-state.CONFIRMED { background: var(--free); }
   .res-state.CANCELLED { background: var(--taken); }
   .res-state.DRAFT { background: var(--neutral); }
+  .res-state.PENDING_APPROVAL { background: var(--pending); }
+  .res-state.REJECTED { background: var(--taken); }
+  .res-state.EXPIRED { background: var(--neutral); }
   .res-detail { display: none; font-size: 0.82rem; color: #57606a; margin-top: 8px; line-height: 1.6; text-align: left; }
   .res-detail.show { display: block; }
   .res-empty { color: #57606a; font-size: 0.9rem; padding: 12px 0; }
+  .res-actions { display: flex; gap: 8px; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -225,6 +259,7 @@
     <span><span class="swatch" style="background:var(--taken)"></span>Taken</span>
     <span><span class="swatch" style="background:var(--neutral)"></span>Outside hours</span>
     <span><span class="swatch" style="background:var(--selected)"></span>Selected</span>
+    <span><span class="swatch" style="background:var(--pending)"></span>Requires approval (VIP)</span>
   </div>
 
   <div class="grid" id="grid"></div>
@@ -258,11 +293,14 @@
   <div class="msg" id="cancelMsg"></div>
 </div>
 
-<!-- Reservation-confirmed popup -->
+<!-- Reservation-created popup: wording depends on the actual state returned
+     by the API (CONFIRMED vs PENDING_APPROVAL), not assumed from the request.
+     This is a UI-completeness fix only -- it does not change any business
+     rule or add a feature the backend doesn't already have. -->
 <div class="modal-backdrop" id="modalBackdrop">
   <div class="modal">
-    <h2>Reservation confirmed 🎉</h2>
-    <p>Your reservation ID (save this to cancel later):</p>
+    <h2 id="modalTitle">Reservation confirmed 🎉</h2>
+    <p id="modalBody">Your reservation ID (save this to cancel later):</p>
     <code id="modalId"></code>
     <button class="primary" id="modalCloseBtn">Done</button>
   </div>
@@ -341,6 +379,26 @@
   </div>
 </div>
 
+<!-- Admin: pending approvals modal. Only reachable for an is_admin account
+     (the button that opens it is only rendered for one, and the server
+     re-checks is_admin on every call -- the UI gate is a convenience, not
+     the security boundary). Deliberately exposes only what already exists
+     on the backend (GET /reservations/pending, POST .../approve, .../reject,
+     POST /admin/reservations/trigger-expiration) -- no new backend
+     capability was added for this panel. -->
+<div class="modal-backdrop" id="adminBackdrop">
+  <div class="modal wide">
+    <h2>Pending approvals</h2>
+    <div class="res-list" id="pendingList"></div>
+    <div class="actions">
+      <button class="secondary" id="adminRefreshBtn">Refresh</button>
+      <button class="secondary" id="adminExpireBtn">Run expiration sweep</button>
+      <button class="secondary" id="adminCloseBtn">Close</button>
+    </div>
+    <div class="hint" id="adminMsg"></div>
+  </div>
+</div>
+
 <script>
 const dateEl = document.getElementById('date');
 const startEl = document.getElementById('start');
@@ -354,6 +412,8 @@ const confirmBtn = document.getElementById('confirmBtn');
 const clearBtn = document.getElementById('clearBtn');
 const formError = document.getElementById('formError');
 const modalBackdrop = document.getElementById('modalBackdrop');
+const modalTitle = document.getElementById('modalTitle');
+const modalBody = document.getElementById('modalBody');
 const modalId = document.getElementById('modalId');
 const modalCloseBtn = document.getElementById('modalCloseBtn');
 const cancelIdEl = document.getElementById('cancelId');
@@ -384,6 +444,13 @@ const showLoginBtn = document.getElementById('showLoginBtn');
 const myResBackdrop = document.getElementById('myResBackdrop');
 const resList = document.getElementById('resList');
 const myResCloseBtn = document.getElementById('myResCloseBtn');
+
+const adminBackdrop = document.getElementById('adminBackdrop');
+const pendingList = document.getElementById('pendingList');
+const adminRefreshBtn = document.getElementById('adminRefreshBtn');
+const adminExpireBtn = document.getElementById('adminExpireBtn');
+const adminCloseBtn = document.getElementById('adminCloseBtn');
+const adminMsg = document.getElementById('adminMsg');
 
 let selectedResourceId = null;
 let resourcesCache = [];
@@ -417,12 +484,17 @@ function authHeaders() {
   return session ? { 'Authorization': `Bearer ${session.token}` } : {};
 }
 
+function isAdmin() {
+  return !!(session && session.account && session.account.is_admin);
+}
+
 function renderSessionBar() {
   sessionBar.innerHTML = '';
   if (session) {
     const greeting = document.createElement('span');
     greeting.className = 'greeting';
-    greeting.textContent = `Hi, ${session.account.first_name}`;
+    greeting.innerHTML = (isAdmin() ? '<span class="admin-badge">ADMIN</span>' : '') +
+      `Hi, ${session.account.first_name}`;
     const myResBtn = document.createElement('button');
     myResBtn.className = 'secondary';
     myResBtn.textContent = 'My reservations';
@@ -431,7 +503,15 @@ function renderSessionBar() {
     logoutBtn.className = 'secondary';
     logoutBtn.textContent = 'Log out';
     logoutBtn.addEventListener('click', logout);
-    sessionBar.append(greeting, myResBtn, logoutBtn);
+    sessionBar.append(greeting, myResBtn);
+    if (isAdmin()) {
+      const adminBtn = document.createElement('button');
+      adminBtn.className = 'secondary';
+      adminBtn.textContent = 'Pending approvals';
+      adminBtn.addEventListener('click', openAdminPanel);
+      sessionBar.append(adminBtn);
+    }
+    sessionBar.append(logoutBtn);
   } else {
     const loginBtn = document.createElement('button');
     loginBtn.className = 'secondary';
@@ -574,6 +654,11 @@ async function loadResources() {
   renderGrid(null);
 }
 
+function resourceRequiresApproval(id) {
+  const r = resourcesCache.find(r => r.id === id);
+  return !!(r && r.requires_approval);
+}
+
 function renderGrid(availabilityById, closed) {
   gridEl.innerHTML = '';
   resourcesCache.forEach(r => {
@@ -613,7 +698,7 @@ async function refreshAvailability() {
     }
     renderGrid(null, /* closed */ true);
     hintEl.textContent =
-      `Campus parking operates ${appConfig.operating_hours_start}\u2013${appConfig.operating_hours_end}. ` +
+      `Campus parking operates ${appConfig.operating_hours_start}–${appConfig.operating_hours_end}. ` +
       `Pick a start time and duration that both fall within those hours.`;
     return;
   }
@@ -636,7 +721,7 @@ async function refreshAvailability() {
   if (data.length > 0 && data.every(d => !d.available)) {
     hintEl.textContent = 'Every spot is already booked for this time -- try another slot.';
   } else {
-    hintEl.textContent = 'Green spots are free -- click one to reserve it.';
+    hintEl.textContent = 'Green spots are free -- click one to reserve it. Gold-labelled spots (see legend) need admin approval before they are confirmed.';
   }
 }
 
@@ -687,6 +772,17 @@ async function confirmReservation() {
     const confirmed = await confirmRes.json();
     if (!confirmRes.ok) throw new Error(confirmed.detail || 'Could not confirm reservation.');
 
+    // The popup text reflects the ACTUAL state the backend returned, not an
+    // assumption that confirm() always lands on CONFIRMED -- a resource
+    // with requires_approval=true returns PENDING_APPROVAL instead, and
+    // that is a real, different outcome the user needs to see as such.
+    if (confirmed.state === 'PENDING_APPROVAL') {
+      modalTitle.textContent = 'Reservation submitted -- awaiting approval ⏳';
+      modalBody.textContent = 'This spot requires admin approval before it is confirmed. Your reservation ID (save this to check or cancel later):';
+    } else {
+      modalTitle.textContent = 'Reservation confirmed 🎉';
+      modalBody.textContent = 'Your reservation ID (save this to cancel later):';
+    }
     modalId.textContent = confirmed.id;
     openModal(modalBackdrop);
     resetForm();
@@ -739,6 +835,11 @@ function resourceLabel(id) {
   return r ? r.label : id;
 }
 
+// States from which the owner may still cancel (mirrors services.py's
+// CANCELLABLE_STATES -- the server is the real authority, this only
+// controls whether the "Delete" button is clickable in the UI).
+const CANCELLABLE_STATES = new Set(['DRAFT', 'PENDING_APPROVAL', 'CONFIRMED']);
+
 async function openMyReservations() {
   openModal(myResBackdrop);
   resList.innerHTML = '<div class="res-empty">Loading...</div>';
@@ -772,12 +873,12 @@ function renderMyReservations(rows) {
     const label = document.createElement('span');
     label.className = 'label';
     label.innerHTML = `${resourceLabel(r.resource_id)} · ${formatRange(r.start_time, r.end_time)}` +
-      `<span class="res-state ${r.state}">${r.state}</span>`;
+      `<span class="res-state ${r.state}">${r.state.replace('_', ' ')}</span>`;
 
     const delBtn = document.createElement('button');
     delBtn.className = 'danger';
     delBtn.textContent = 'Delete';
-    delBtn.disabled = r.state === 'CANCELLED';
+    delBtn.disabled = !CANCELLABLE_STATES.has(r.state);
     delBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       delBtn.disabled = true;
@@ -801,6 +902,7 @@ function renderMyReservations(rows) {
       <div>Name: ${r.user_name || '—'}</div>
       <div>Plate: ${r.user_id}</div>
       <div>State: ${r.state}</div>
+      ${r.approval_expires_at ? `<div>Approval deadline: ${new Date(r.approval_expires_at).toLocaleString()}</div>` : ''}
     `;
 
     summary.addEventListener('click', () => detail.classList.toggle('show'));
@@ -811,6 +913,133 @@ function renderMyReservations(rows) {
 }
 
 myResCloseBtn.addEventListener('click', () => closeModal(myResBackdrop));
+
+// ---------- admin: pending approvals ----------
+//
+// This panel is a thin UI wrapper around endpoints that already existed
+// on the backend (GET /reservations/pending, POST .../approve, .../reject,
+// POST /admin/reservations/trigger-expiration). It deliberately does NOT
+// add anything the backend can't already do -- in particular it does not
+// let an admin cancel someone else's reservation (that gap is intentional,
+// see docs/evidence-and-evolution.md) and it does not replace the manual
+// expiration trigger with a real scheduler (also intentional, see ADR-01
+// in docs/architecture-and-decisions.md -- "expiration stays reactive").
+
+async function openAdminPanel() {
+  openModal(adminBackdrop);
+  adminMsg.textContent = '';
+  await loadPendingApprovals();
+}
+
+async function loadPendingApprovals() {
+  pendingList.innerHTML = '<div class="res-empty">Loading...</div>';
+  try {
+    const res = await fetch('/reservations/pending', { headers: authHeaders() });
+    if (res.status === 403) {
+      pendingList.innerHTML = '<div class="res-empty">Admin privileges required.</div>';
+      return;
+    }
+    const rows = await res.json();
+    renderPendingApprovals(rows);
+  } catch {
+    pendingList.innerHTML = '<div class="res-empty">Could not load pending approvals.</div>';
+  }
+}
+
+function renderPendingApprovals(rows) {
+  pendingList.innerHTML = '';
+  if (rows.length === 0) {
+    pendingList.innerHTML = '<div class="res-empty">Nothing is waiting for approval right now.</div>';
+    return;
+  }
+  rows.forEach(r => {
+    const row = document.createElement('div');
+    row.className = 'res-row';
+
+    const summary = document.createElement('div');
+    summary.className = 'res-summary';
+
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.innerHTML = `${resourceLabel(r.resource_id)} · ${formatRange(r.start_time, r.end_time)}` +
+      `<span class="res-state ${r.state}">${r.state.replace('_', ' ')}</span>`;
+
+    const actions = document.createElement('div');
+    actions.className = 'res-actions';
+
+    const approveBtn = document.createElement('button');
+    approveBtn.className = 'approve';
+    approveBtn.textContent = 'Approve';
+    const rejectBtn = document.createElement('button');
+    rejectBtn.className = 'reject';
+    rejectBtn.textContent = 'Reject';
+
+    async function decide(action, btn) {
+      approveBtn.disabled = true;
+      rejectBtn.disabled = true;
+      adminMsg.textContent = '';
+      try {
+        const res = await fetch(`/reservations/${r.id}/${action}`, {
+          method: 'POST',
+          headers: authHeaders(),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Could not ${action} reservation.`);
+        adminMsg.textContent = `Reservation ${r.id} ${action === 'approve' ? 'approved' : 'rejected'}.`;
+        adminMsg.style.color = 'var(--free)';
+        await loadPendingApprovals();
+        refreshAvailability();
+      } catch (err) {
+        adminMsg.textContent = err.message;
+        adminMsg.style.color = 'var(--taken)';
+        approveBtn.disabled = false;
+        rejectBtn.disabled = false;
+      }
+    }
+
+    approveBtn.addEventListener('click', () => decide('approve', approveBtn));
+    rejectBtn.addEventListener('click', () => decide('reject', rejectBtn));
+    actions.append(approveBtn, rejectBtn);
+    summary.append(label, actions);
+
+    const detail = document.createElement('div');
+    detail.className = 'res-detail';
+    detail.innerHTML = `
+      <div>Reservation ID: <code>${r.id}</code></div>
+      <div>Name: ${r.user_name || '—'}</div>
+      <div>Plate: ${r.user_id}</div>
+      ${r.approval_expires_at ? `<div>Approval deadline: ${new Date(r.approval_expires_at).toLocaleString()}</div>` : ''}
+    `;
+    summary.addEventListener('click', (e) => {
+      if (e.target === approveBtn || e.target === rejectBtn) return;
+      detail.classList.toggle('show');
+    });
+
+    row.append(summary, detail);
+    pendingList.appendChild(row);
+  });
+}
+
+adminRefreshBtn.addEventListener('click', loadPendingApprovals);
+adminCloseBtn.addEventListener('click', () => closeModal(adminBackdrop));
+adminExpireBtn.addEventListener('click', async () => {
+  adminMsg.textContent = '';
+  try {
+    const res = await fetch('/admin/reservations/trigger-expiration', {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Could not run expiration sweep.');
+    adminMsg.textContent = `Expiration sweep done: ${data.expired_count} reservation(s) expired.`;
+    adminMsg.style.color = 'var(--free)';
+    await loadPendingApprovals();
+    refreshAvailability();
+  } catch (err) {
+    adminMsg.textContent = err.message;
+    adminMsg.style.color = 'var(--taken)';
+  }
+});
 
 // ---------- wiring ----------
 
@@ -829,7 +1058,8 @@ modalCloseBtn.addEventListener('click', () => closeModal(modalBackdrop));
     // verify the token is still valid server-side before trusting it
     const res = await fetch('/auth/me', { headers: { 'Authorization': `Bearer ${stored.token}` } });
     if (res.ok) {
-      session = stored;
+      const account = await res.json();
+      session = { token: stored.token, account };
     } else {
       localStorage.removeItem('parking_session');
     }

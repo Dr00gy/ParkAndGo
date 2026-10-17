@@ -18,12 +18,18 @@ approval), but it never sets REJECTED or EXPIRED, and it is not the one
 that decides PENDING_APPROVAL -> CONFIRMED. Those three transitions are
 owned exclusively by `approval.py`. This split is what
 tests/test_architecture_rule.py checks automatically.
+
+C05 (Detailed Design): the overlap decision itself now lives in
+availability.py's has_overlap(), a declared contract shared with
+approval.py, instead of a private helper of this module. See
+docs/architecture-and-decisions.md, "C05 Detailed Design".
 """
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 from sqlalchemy.orm import Session
 
+from .availability import has_overlap
 from .db import ReservationORM, ResourceORM
 from .models import Reservation, ReservationState
 from .notification import NotificationService
@@ -89,24 +95,6 @@ def _not_in_the_past(start_time: datetime) -> bool:
     return start_time >= datetime.now()
 
 
-def _has_overlapping_confirmed(
-    session: Session,
-    resource_id: str,
-    start_time: datetime,
-    end_time: datetime,
-    exclude_reservation_id: str | None = None,
-) -> bool:
-    query = session.query(ReservationORM).filter(
-        ReservationORM.resource_id == resource_id,
-        ReservationORM.state == ReservationState.CONFIRMED,
-        ReservationORM.start_time < end_time,
-        ReservationORM.end_time > start_time,
-    )
-    if exclude_reservation_id is not None:
-        query = query.filter(ReservationORM.id != exclude_reservation_id)
-    return session.query(query.exists()).scalar()
-
-
 def check_availability(
     session: Session, resource_id: str, start_time: datetime, end_time: datetime
 ) -> bool:
@@ -114,10 +102,14 @@ def check_availability(
 
     Only CONFIRMED reservations block a slot -- PENDING_APPROVAL does not
     (BR-12 / approval_workflow_impact_analysis.md: explicitly non-blocking,
-    so two users may wait on the same slot and the first approval wins)."""
+    so two users may wait on the same slot and the first approval wins).
+
+    C05: the actual overlap decision is delegated to availability.py's
+    has_overlap() -- the one declared contract both this module and
+    approval.py depend on (see ADR for the Availability Policy)."""
     if not _within_operating_hours(start_time, end_time):
         return False
-    return not _has_overlapping_confirmed(session, resource_id, start_time, end_time)
+    return not has_overlap(session, resource_id, start_time, end_time)
 
 
 def create_draft(
@@ -166,7 +158,7 @@ def confirm(
         raise ReservationError(
             f"cannot confirm a reservation in state {reservation.state}, must be DRAFT"
         )
-    if _has_overlapping_confirmed(
+    if has_overlap(
         session,
         reservation.resource_id,
         reservation.start_time,
@@ -233,7 +225,7 @@ def prolong(session: Session, reservation_id: str, new_end_time: datetime) -> Re
             f"reservation duration must be a multiple of {RESERVATION_STEP_MINUTES} minutes, "
             f"up to {MAX_DURATION_MINUTES} minutes"
         )
-    if _has_overlapping_confirmed(
+    if has_overlap(
         session,
         reservation.resource_id,
         reservation.start_time,

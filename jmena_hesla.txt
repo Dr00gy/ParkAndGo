@@ -1,0 +1,5 @@
+admin:
+admin@parkandgo.test / admin12345
+
+user:
+denis.denis@bleble.cz / denisdenis

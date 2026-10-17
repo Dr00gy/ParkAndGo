@@ -16,6 +16,13 @@ services.py still owns the single entry transition DRAFT -> PENDING_APPROVAL
 (inside confirm()), because that is a creation-time routing decision, not
 an approval outcome -- the same split the C03 assignment's own G3 example
 table uses (different owners for different transitions of the same state).
+
+C05 (Detailed Design): the overlap re-check below now calls the shared
+Availability Policy contract (availability.has_overlap()) instead of
+reaching into a private helper of services.py. See
+docs/architecture-and-decisions.md, "C05 Detailed Design", for the full
+responsibility breakdown, the interface contract, and the detailed
+sequence/algorithm for approve().
 """
 from __future__ import annotations
 
@@ -23,10 +30,11 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from .availability import has_overlap
 from .db import ReservationORM
 from .models import ReservationState
 from .notification import NotificationService
-from .services import ReservationError, _has_overlapping_confirmed
+from .services import ReservationError
 
 
 def approve(
@@ -42,6 +50,11 @@ def approve(
     (because expiry was only applied lazily by a separate endpoint). Now
     approve() itself refuses -- and flips the row to EXPIRED -- once the
     deadline is in the past, so "approve" can never race past "expire".
+
+    C05 algorithm decision: the deadline check runs BEFORE the overlap
+    re-check (see docs/architecture-and-decisions.md, "Algorithm / decision
+    logic") -- a stale request should self-correct to EXPIRED regardless
+    of what else happened to the slot meanwhile.
     """
     reservation = session.get(ReservationORM, reservation_id)
     if reservation is None:
@@ -59,7 +72,9 @@ def approve(
     # Re-check overlap: time has passed since the reservation entered
     # PENDING_APPROVAL, and another reservation for the same slot may have
     # been confirmed in the meantime (BR-02 must still hold on the way out).
-    if _has_overlapping_confirmed(
+    # C05: delegates to the shared Availability Policy contract (same one
+    # services.py uses), not a private services.py helper anymore.
+    if has_overlap(
         session,
         reservation.resource_id,
         reservation.start_time,

@@ -20,15 +20,26 @@ Wrote `tests/test_persistence_spike.py`:
 4. Read the reservation back by ID and asserted every field
    (resource, user, start/end time, state) matched what was written.
 
-Ran it together with the rest of the test suite (12 tests total as of
-C03, after the approval-workflow and architecture-conformance tests were
-added — see the C03 section below):
+Ran it together with the rest of the test suite (23 tests total as of
+C05, after the approval-workflow, architecture-conformance and C05
+unit/component tests were added — see the C03 and C05 sections below):
 
 ```
 $ python -m pytest -v
+tests/test_approval_workflow.py::test_approve_pending_within_deadline_confirms_and_notifies PASSED
+tests/test_approval_workflow.py::test_reject_pending_sets_rejected PASSED
+tests/test_approval_workflow.py::test_approve_past_deadline_marks_expired_and_raises PASSED
+tests/test_approval_workflow.py::test_approve_non_pending_state_raises PASSED
+tests/test_approval_workflow.py::test_reject_non_pending_state_raises PASSED
+tests/test_approval_workflow.py::test_concurrent_overlapping_approvals_second_is_rejected PASSED
+tests/test_approval_workflow.py::test_expire_pending_only_expires_past_deadline PASSED
 tests/test_architecture_rule.py::test_services_module_never_sets_rejected_or_expired PASSED
 tests/test_architecture_rule.py::test_services_module_does_not_transition_pending_approval_to_confirmed PASSED
 tests/test_architecture_rule.py::test_approval_module_owns_the_three_outcome_transitions PASSED
+tests/test_availability_policy.py::test_has_overlap_detects_confirmed_overlap PASSED
+tests/test_availability_policy.py::test_has_overlap_respects_half_open_interval PASSED
+tests/test_availability_policy.py::test_has_overlap_ignores_non_confirmed_states PASSED
+tests/test_availability_policy.py::test_has_overlap_excludes_given_reservation_id PASSED
 tests/test_persistence_spike.py::test_reservation_survives_a_fresh_engine_and_session PASSED
 tests/test_reservation_service.py::test_overlapping_confirmed_reservations_are_rejected PASSED
 tests/test_reservation_service.py::test_non_overlapping_confirmed_reservations_are_allowed PASSED
@@ -39,7 +50,7 @@ tests/test_reservation_service.py::test_cancel_frees_up_the_slot_for_a_new_confi
 tests/test_reservation_service.py::test_prolong_into_another_confirmed_reservation_is_rejected PASSED
 tests/test_reservation_service.py::test_list_reservations_for_account PASSED
 
-12 passed in 0.46s
+23 passed in 0.53s
 ```
 
 We also manually exercised the HTTP layer end-to-end (`POST /reservations`
@@ -58,9 +69,9 @@ not an artifact of shared in-process state.
 Persistence is confirmed to work at the level we need for CP1. Two
 follow-ups were surfaced by writing this spike (not fixed then, directly
 relevant to the C03 decision below):
-1. The overlap check (`_has_overlapping_confirmed`) is a plain
-   read-then-write within one session — fine for a single-process demo,
-   but not safe under concurrent writers. This directly informs the
+1. The overlap check (`_has_overlapping_confirmed`, now `availability.has_overlap`)
+   is a plain read-then-write within one session — fine for a single-process
+   demo, but not safe under concurrent writers. This directly informs the
    selected future pressure (Q — scale) in `intent-and-change.md`, and is
    the central driver behind ADR-01 in `c03-architecture.md`.
 2. We're using a single shared SQLite file (`parking.db`) for the running
@@ -228,7 +239,8 @@ underlying race window is narrowed but not eliminated. Full text in
 **Views produced:** domain class model, context diagram, static
 architecture (component) diagram, state-ownership table, runtime/
 deployment mapping, design sequence diagram, design class diagram — all
-in `c03-architecture.md`.
+in `c03-architecture.md` (ASCII) and `c03-plantuml-diagrams.md` (PlantUML,
+ready to render).
 
 **Cross-view issues found/resolved:** the architecture-conformance test
 initially flagged `services.py`'s own explanatory docstring as a
@@ -249,7 +261,7 @@ added.
 **Behaviour verification:** all 11 C02 approval scenarios re-run against
 the real HTTP API — all PASS, including the two that were previously
 broken (mismatch #1, #2) and are now fixed and verified. All 12 automated
-tests pass (`pytest -v`).
+tests pass (`pytest -v`) as of C03.
 
 **Architecture conformance rule + result:** "Only `src/approval.py` may
 decide a pending approval's outcome" — checked by
@@ -264,3 +276,71 @@ still only supports a "confirmed" outcome. The deadline is not capped to
 the reservation's start time (mismatch #4).
 
 **Commit/tag:** fill in after committing.
+
+---
+
+# C05 DD Verification Evidence
+
+Full Detailed Design (selected unit, detailed responsibilities, design
+elements/ownership, interface contract, focused structural view, detailed
+sequence, methods/operations, algorithm) is in
+**`architecture-and-decisions.md`**, section "C05 Detailed Design".
+Summary for this evidence log:
+
+**Selected unit:** Approval Workflow (`src/approval.py`) + the new
+Availability Policy contract it depends on (`src/availability.py`).
+
+### Tests derived from DD
+
+| DD element / decision | What must hold? | Test level | Test case |
+|---|---|---|---|
+| `AvailabilityPolicy.has_overlap` interface contract (only CONFIRMED blocks) | PENDING_APPROVAL / DRAFT / CANCELLED / REJECTED / EXPIRED never count as an overlap | unit | `test_availability_policy.py::test_has_overlap_ignores_non_confirmed_states` |
+| `AvailabilityPolicy.has_overlap` interface contract (half-open interval) | a reservation ending exactly when another starts is not an overlap (BR-01) | unit | `test_availability_policy.py::test_has_overlap_respects_half_open_interval` |
+| `approve()` algorithm branch: deadline check | past-deadline approve must self-correct the row to EXPIRED and raise, never silently approve | unit | `test_approval_workflow.py::test_approve_past_deadline_marks_expired_and_raises` |
+| state transition: `approve()` entry guard | `approve()` on a reservation that is not `PENDING_APPROVAL` must raise and write nothing | unit | `test_approval_workflow.py::test_approve_non_pending_state_raises` |
+| state transition: `reject()` entry guard (terminal states) | `reject()` on an already-decided reservation must raise, not silently re-decide it | unit | `test_approval_workflow.py::test_reject_non_pending_state_raises` |
+| collaboration: `ApprovalWorkflow` ↔ `AvailabilityPolicy` under the C03 race scenario | two PENDING_APPROVAL reservations for the same slot: first `approve()` succeeds, second must be rejected by the overlap re-check (BR-02 after the delay, ADR-01 driver #2) | component | `test_approval_workflow.py::test_concurrent_overlapping_approvals_second_is_rejected` |
+| batch algorithm: `expire_pending()` | only rows whose deadline has passed are flipped to EXPIRED; everything else is left untouched | unit | `test_approval_workflow.py::test_expire_pending_only_expires_past_deadline` |
+
+Two selected for the required deeper explanation:
+
+- **`test_has_overlap_ignores_non_confirmed_states`** — *Selected level:* unit. *Why this level:* the contract itself (what counts as "overlap") is exactly what's being verified, independent of who calls it — no HTTP, no second module needed to observe it. *Design decision verified:* that `has_overlap()` is now the one authoritative answer to "is this slot free", decoupled from any particular caller — the entire reason it was extracted out of `services.py` in this DD pass.
+- **`test_concurrent_overlapping_approvals_second_is_rejected`** — *Selected level:* component. *Why this level:* this is specifically testing the *collaboration* between two units (`ApprovalWorkflow` calling into `AvailabilityPolicy`) across two sequential calls with real DB state in between — a single-function unit test can't exercise that. *Design decision verified:* ADR-01 driver #2 and the C05 algorithm-ordering decision (overlap re-checked at approval time, not just at confirm time) actually hold end-to-end, not just on paper.
+
+### Unit/component tests executed
+
+```
+$ python -m pytest -v
+tests/test_approval_workflow.py::test_approve_pending_within_deadline_confirms_and_notifies PASSED
+tests/test_approval_workflow.py::test_reject_pending_sets_rejected PASSED
+tests/test_approval_workflow.py::test_approve_past_deadline_marks_expired_and_raises PASSED
+tests/test_approval_workflow.py::test_approve_non_pending_state_raises PASSED
+tests/test_approval_workflow.py::test_reject_non_pending_state_raises PASSED
+tests/test_approval_workflow.py::test_concurrent_overlapping_approvals_second_is_rejected PASSED
+tests/test_approval_workflow.py::test_expire_pending_only_expires_past_deadline PASSED
+tests/test_availability_policy.py::test_has_overlap_detects_confirmed_overlap PASSED
+tests/test_availability_policy.py::test_has_overlap_respects_half_open_interval PASSED
+tests/test_availability_policy.py::test_has_overlap_ignores_non_confirmed_states PASSED
+tests/test_availability_policy.py::test_has_overlap_excludes_given_reservation_id PASSED
+
+11 passed (plus all 12 pre-existing tests still pass -- 23 passed in 0.53s total)
+```
+
+### Design ↔ implementation mismatch
+
+| DD decision | Implemented? | Evidence | Action |
+|---|---|---|---|
+| `AvailabilityPolicy.has_overlap()` as a standalone, named interface | YES | `src/availability.py`; `services.py` and `approval.py` both import it | keep |
+| `approve()` checks deadline before overlap | YES | algorithm in `src/approval.py::approve`; `test_approve_past_deadline_marks_expired_and_raises` | keep |
+| Admin authorization kept outside the unit (HTTP layer) | YES | `main.py::_require_admin`; `approve`/`reject` take a plain `admin_account_id` | keep |
+| `expire_pending()` as a separate batch responsibility | YES | `src/approval.py::expire_pending`; `test_expire_pending_only_expires_past_deadline` | keep |
+| Notification on reject/expire | **NO** (by design, not an oversight) | `reject()`/`expire_pending()` call no notifier — see `architecture-and-decisions.md`, driver #5, still open | keep as an explicitly recorded gap, do not silently implement |
+
+No mismatch required reconciling the DD against the code — every decision documented in the DD was found implemented exactly as designed when checked against the actual source, with the one exception (notification on reject/expire) that was already a *known*, intentionally-recorded open gap rather than a surprise.
+
+### Remaining design risk
+
+- The overlap re-check inside `approve()` and the eventual write are still not wrapped in a single DB-level transaction with a stronger isolation level — under true concurrent requests (not just the sequential two-admin scenario the tests exercise), a narrower race than the one already closed could still exist at the SQLite layer. This is the same risk already recorded against ADR-01 and the Q/Scale future pressure in `intent-and-change.md`; C05 narrowed where that risk lives (one named function, `has_overlap`) but did not close it.
+- `expire_pending()` is still only reachable via a manually-triggered endpoint, not a scheduler — unchanged from ADR-01's accepted consequence.
+
+**Commit/tag:** fill in after committing (`src/availability.py` new; `src/services.py`, `src/approval.py` updated; `tests/test_availability_policy.py`, `tests/test_approval_workflow.py` new).
