@@ -340,7 +340,45 @@ No mismatch required reconciling the DD against the code — every decision docu
 
 ### Remaining design risk
 
-- The overlap re-check inside `approve()` and the eventual write are still not wrapped in a single DB-level transaction with a stronger isolation level — under true concurrent requests (not just the sequential two-admin scenario the tests exercise), a narrower race than the one already closed could still exist at the SQLite layer. This is the same risk already recorded against ADR-01 and the Q/Scale future pressure in `intent-and-change.md`; C05 narrowed where that risk lives (one named function, `has_overlap`) but did not close it.
+- The overlap re-check inside `approve()` and the eventual write are still not wrapped in a single DB-level transaction with a stronger isolation level — under true concurrent requests (not just the sequential two-admin scenario the tests exercise), a narrower race than the one already closed could still exist at the SQLite layer. This is the same risk already recorded against ADR-01 and the Q/Scale future pressure in `intent-and-change.md`; C05 narrowed where that risk lives (one named function, `has_overlap`) but did not close it. **As of C06, this is no longer just a stated risk — see finding F1 below for an actual measurement.**
 - `expire_pending()` is still only reachable via a manually-triggered endpoint, not a scheduler — unchanged from ADR-01's accepted consequence.
 
 **Commit/tag:** fill in after committing (`src/availability.py` new; `src/services.py`, `src/approval.py` updated; `tests/test_availability_policy.py`, `tests/test_approval_workflow.py` new).
+
+---
+
+# C06 Internal Evidence Assessment
+
+**Assessed baseline:** reviewed by team **AutoRepo** on 2026-10-25, against
+our working `main` tree (no commit/tag had been recorded at review time —
+see finding F2). Full checklist (B1–B2, R1–R5, A1–A4, Q1–Q3, D1–D5) is
+preserved as submitted in `C06_Assessment_Form_CZ_filled.md` /
+`C06_Assessment_Form_EN_filled.md`; this section records only what this
+assignment asks for: findings, our disposition, and what we actually did
+about each one.
+
+**Verified findings:**
+
+| ID | Source | Claim | Reviewer's observation | Result |
+|---|---|---|---|---|
+| F1 | `intent-and-change.md`; C04 quality evidence | The design addresses the 10× concurrent reservation pressure | The pressure and race risk are described, but no load/concurrency measurement, p95 threshold, or decision based on measured data exists | VERIFIED FINDING |
+| F2 | Repository baseline metadata | Docs, code and tests represent one assessable version | `main` had a modified `parking.db` and an untracked `ParkAndGo.iml`; no assessed commit/tag was named | VERIFIED FINDING |
+| F3 | `ParkAndGo_consistency_checks.md` | The consistency table describes the current implementation | It still named the old private `_has_overlapping_confirmed()` helper and said Prolong was missing from the use-case diagram, while `src/availability.py` (C05) and `ParkAndGo_consistency_checks_ult.md` already show the corrected state | VERIFIED FINDING |
+
+**Owner disposition:**
+
+| Finding | Disposition | Reason / evidence |
+|---|---|---|
+| F1 | **ACCEPTED — change required, now done** | The quality concern itself was always real (`intent-and-change.md`, driver #2 in `c03-architecture.md`, "Remaining design risk" in the C05 section above) but was never actually measured, only narrated. We added `tests/test_concurrency_measurement.py`: 10 concurrent `confirm()` calls on the same resource and the same fully-overlapping slot, each in its own thread with its own DB session against one shared SQLite file (the exact scenario `intent-and-change.md` describes). **Measured result (representative run): 4 of 10 concurrent requests ended up CONFIRMED on the same slot — not 1.** This empirically confirms BR-02 does *not* hold under true concurrent load with the current application-level, read-then-write overlap check. The test is marked `xfail(strict=False)`, because fixing it (a DB-level uniqueness/exclusion constraint or `SELECT ... FOR UPDATE`-style locking) is the exact scope we deliberately did not add — see the standing decision recorded in `architecture-and-decisions.md` / ADR-01 "reconsider when" and the explicit instruction we were given not to add DB-level concurrency locking in this phase of the project. The measurement itself — not a code fix — is the action item this finding asked for, and it is now a permanent, re-runnable part of the test suite instead of a one-off number in a report. |
+| F2 | **ACCEPTED — change required, now done** | Added a `.gitignore` (new file, pushed to the project store) excluding `*.db`, `*.iml`, `.idea/`, virtualenvs and bytecode caches, with a comment pointing back at this finding so the reason doesn't get silently lost later. **Remaining action for the team:** commit this `.gitignore`, remove `parking.db`/`ParkAndGo.iml` from version control if they were ever committed, and record the resulting commit hash in the three "Fill in after committing" placeholders in this document (C02, C03 and C05 sections above) — that step has to happen in the real repository, which this session cannot push to directly. |
+| F3 | **ACCEPTED — change required, now done** | `docs/ParkAndGo_consistency_checks.md` rows 2 and 5 were stale. Row 2 now names `availability.has_overlap()` instead of the retired private helper and cross-references the C05 extraction. Row 5 is kept as the original "before" finding (not silently rewritten) but is now explicitly marked resolved, pointing at `ParkAndGo_consistency_checks_ult.md` for the corrected diagram, so a reader doesn't have to guess which of the two documents is current. |
+
+**Actions / justified no-change decisions:**
+- F1: no production code changed (see disposition above — a DB-level fix is an explicit, previously-agreed out-of-scope item); a permanent, re-runnable measurement test was added instead, which is the concrete, honest version of "we checked" rather than "we assume it's fine."
+- F2: `.gitignore` added; committing it, cleaning the working tree, and recording the commit hash are manual steps for the team to do in the real repository (cannot be done from this session).
+- F3: documentation corrected in place; no code changed, since the underlying code (`availability.py`, the Prolong operation) was already correct — only the consistency-check document had fallen behind it.
+
+**Remaining evidence gaps:**
+- The three "Application commit / tag: fill in after committing" placeholders (C02, C03, C05 sections above) are still unfilled — this requires an actual `git commit`/`git tag` in the team's own repository, which is outside what this assessment pass could do.
+- F1's measurement demonstrates the race exists; it does not yet measure *how often* it occurs under the full declared 10× workload sustained over time (our test is a single 10-request burst, not a semester-opening-week load profile). A fuller load test remains future work if the team later decides to revisit the ADR-01 "reconsider when" trigger.
+- No second finding review cycle was performed on our own corrections (F1–F3) by an independent party; they were verified by re-running the full test suite (`pytest -v` → 23 passed, 1 xfailed) and by direct inspection of the corrected documents, not by a second reviewing team.
